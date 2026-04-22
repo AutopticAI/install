@@ -1,4 +1,9 @@
 {{- if .Values.ui.enabled }}
+{{- $apiServiceName := default "api-service" .Values.api.service.name }}
+{{- $apiPort := default 9999 .Values.api.service.port }}
+{{- $apiNamespace := .Values.namespace.name }}
+{{- $defaultAutopticServerUrl := printf "http://%s.%s.svc.cluster.local:%v/" $apiServiceName $apiNamespace $apiPort }}
+{{- $defaultOpenAiBaseUrl := printf "http://%s.%s.svc.cluster.local:%v/v1" $apiServiceName $apiNamespace $apiPort }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -123,9 +128,9 @@ spec:
         - name: RAG_WEB_SEARCH_ENGINE
           value: {{ .Values.ui.env.ragWebSearchEngine | quote }}
         - name: AUTOPTIC_SERVER_URL
-          value: {{ .Values.ui.env.AUTOPTIC_SERVER_URL | quote }}
+          value: {{ default $defaultAutopticServerUrl .Values.ui.env.AUTOPTIC_SERVER_URL | quote }}
         - name: OPENAI_API_BASE_URL
-          value: {{ .Values.ui.env.openaiBaseUrl | quote }}
+          value: {{ default $defaultOpenAiBaseUrl .Values.ui.env.openaiBaseUrl | quote }}
         - name: AUTOPTIC_INSTANCE_ID
           valueFrom:
             configMapKeyRef:

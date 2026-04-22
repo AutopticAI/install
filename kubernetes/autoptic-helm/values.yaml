@@ -193,8 +193,9 @@ ui:
       cpu: "500m"
 
   env:
-    AUTOPTIC_SERVER_URL: http://api-service.autoptic.svc.cluster.local:9999/
-    openaiBaseUrl: http://api-service.autoptic.svc.cluster.local:9999/v1
+    # Leave empty to auto-generate using api.service.name + namespace.name.
+    AUTOPTIC_SERVER_URL: ""
+    openaiBaseUrl: ""
     vectorDb: qdrant
     qdrantUri: http://metrics-service.autoptic.svc.cluster.local:6334
     ragEmbeddingEngine: openai
