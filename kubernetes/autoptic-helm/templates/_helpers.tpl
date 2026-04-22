@@ -253,12 +253,14 @@ Includes: AWS_REGION, AWS credentials (if awsSecret.enabled).
 Generate instance/tenant environment variables.
 */}}
 {{- define "autoptic-server.instanceEnvBlock" -}}
-{{- if .Values.config.extraData.AUTOPTIC_INSTANCE_ID }}
 - name: AUTOPTIC_INSTANCE_ID
-  value: {{ .Values.config.extraData.AUTOPTIC_INSTANCE_ID | quote }}
-{{- end }}
-{{- if .Values.config.extraData.AUTOPTIC_TENANT_SHORT_NAME }}
+  valueFrom:
+    configMapKeyRef:
+      name: {{ include "autoptic-server.configMapName" . }}
+      key: AUTOPTIC_INSTANCE_ID
 - name: AUTOPTIC_TENANT_SHORT_NAME
-  value: {{ .Values.config.extraData.AUTOPTIC_TENANT_SHORT_NAME | quote }}
-{{- end }}
+  valueFrom:
+    configMapKeyRef:
+      name: {{ include "autoptic-server.configMapName" . }}
+      key: AUTOPTIC_TENANT_SHORT_NAME
 {{- end }}
