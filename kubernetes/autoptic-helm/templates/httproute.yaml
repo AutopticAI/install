@@ -1,0 +1,33 @@
+{{- if and .Values.ui.enabled .Values.ui.gateway.enabled }}
+{{- if and .Values.ui.ingress.enabled -}}
+{{- fail "ERROR: Both ui.ingress.enabled and ui.gateway.enabled are true. These are mutually exclusive. Set ui.ingress.enabled: false to use Gateway API, or ui.gateway.enabled: false to use Ingress." -}}
+{{- end -}}
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: ui-route
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    {{- include "autoptic-ui.labels" . | nindent 4 }}
+  {{- with .Values.ui.gateway.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  parentRefs:
+    {{- toYaml .Values.ui.gateway.parentRefs | nindent 4 }}
+  {{- with .Values.ui.gateway.hostnames }}
+  hostnames:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    {{- range .Values.ui.gateway.rules }}
+    - matches:
+        {{- toYaml .matches | nindent 8 }}
+      backendRefs:
+        - group: ""
+          kind: Service
+          name: ui-service
+          port: {{ $.Values.ui.service.port }}
+    {{- end }}
+{{- end }}

@@ -1,0 +1,36 @@
+{{- if and .Values.pql.storage.enabled .Values.pql.storage.createHostPath }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: pql-hostpath-prepare
+  annotations:
+    "helm.sh/hook": pre-install
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded,hook-failed
+    "helm.sh/hook-weight": "1"
+spec:
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: mkdir
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - >-
+              mkdir -p {{ .Values.pql.storage.hostPath }}
+              && chmod {{ default "0770" .Values.pql.storage.hostPathMode }} {{ .Values.pql.storage.hostPath }}
+              {{- if .Values.pql.storage.setHostPathOwner }}
+              && chown {{ .Values.pql.storage.hostPathOwnerUser }}:{{ .Values.pql.storage.hostPathOwnerGroup }} {{ .Values.pql.storage.hostPath }}
+              {{- end }}
+              && echo ok
+          volumeMounts:
+            - name: hostpath
+              mountPath: {{ .Values.pql.storage.hostPath }}
+      volumes:
+        - name: hostpath
+          hostPath:
+            path: {{ .Values.pql.storage.hostPath }}
+            type: DirectoryOrCreate
+{{- end }}
+

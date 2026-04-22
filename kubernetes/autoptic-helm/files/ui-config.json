@@ -1,0 +1,74 @@
+{
+  "messages": {
+    "info": [
+      "Step 1 [INFO]: Tenant name validation - replace-me-tenant",
+      "Step 2 [INFO]: Loaded default configuration from embedded config.json",
+      "Step 3 [INFO]: Instance ID generation - replace-me-instance-id",
+      "Step 4 [INFO]: AWS environment detection - profile: iam-role, region: replace-me-region",
+      "Step 5 [INFO]: Validating AWS connectivity",
+      "Step 5 [INFO]: DynamoDB connectivity validated successfully",
+      "Step 5 [INFO]: DynamoDB permissions validated successfully",
+      "Step 6 [INFO]: S3 connectivity validated successfully",
+      "Step 6 [INFO]: S3 permissions validated successfully",
+      "Step 7 [INFO]: DynamoDB table name generation - autoptic-environment-replace-me-instance-id, autoptic-pql-replace-me-instance-id, autoptic-token-replace-me-instance-id, autoptic-brief-replace-me-instance-id, autoptic-briefrecord-replace-me-instance-id, autoptic-secrets-replace-me-instance-id",
+      "Step 8 [INFO]: S3 bucket name generation - autoptic-snaps-replace-me-instance-id",
+      "Step 9 [INFO]: Scheduler API endpoint configuration - http://api-service.autoptic.svc.cluster.local:9999/story/ep/default",
+      "Step 10 [INFO]: Configuration validation - all required fields present",
+      "Step 11 [INFO]: Configuration preparation completed successfully"
+    ],
+    "warnings": [],
+    "errors": []
+  },
+  "server": {
+    "port": "9999",
+    "host": "0.0.0.0",
+    "ui": "http://ui-service.autoptic.svc.cluster.local:8080",
+    "log_level": "info"
+  },
+  "aws": {
+    "profile": "",
+    "region": "replace-me-region"
+  },
+  "pql": {
+    "command": "/root/pql"
+  },
+  "instance": {
+    "id": "replace-me-instance-id",
+    "tenant_short_name": "replace-me-tenant",
+    "default_endpoint": "default"
+  },
+  "scheduler": {
+    "refresh_interval": "300s",
+    "api_endpoint": "http://api-service.autoptic.svc.cluster.local:9999/story/ep/default",
+    "api_token": "",
+    "timeout": "180s"
+  },
+  "tasks": {
+    "generate": "default",
+    "analyze": "default"
+  },
+  "secrets": {
+    "default": "default"
+  },
+  "vector": {
+    "size": 1024,
+    "model": "e5-large-v2",
+    "embed_url": "http://vectors-service.autoptic.svc.cluster.local:8000",
+    "qdrant_host": "metrics-service.autoptic.svc.cluster.local",
+    "qdrant_port": 6334,
+    "vector_search_timeout_sec": 30
+  },
+  "retry": {
+    "max_retries": 3,
+    "initial_backoff_ms": 100,
+    "max_backoff_ms": 5000
+  },
+  "llm": {
+    "max_chunks": 20,
+    "chunk_overlap_tokens": 100,
+    "token_estimation_ratio": 3,
+    "rate_limit_delay_ms": 1000,
+    "max_concurrent_requests": 3,
+    "requests_per_minute": 60
+  }
+}

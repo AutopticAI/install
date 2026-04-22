@@ -1,0 +1,22 @@
+{{- if and .Values.ui.enabled .Values.ui.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "autoptic-ui.fullname" . }}-data-pvc
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    {{- include "autoptic-ui.labels" . | nindent 4 }}
+spec:
+  accessModes:
+  - {{ .Values.ui.persistence.accessMode }}
+  {{- if .Values.ui.persistence.storageClass }}
+  {{- if (eq "-" .Values.ui.persistence.storageClass) }}
+  storageClassName: ""
+  {{- else }}
+  storageClassName: {{ .Values.ui.persistence.storageClass | quote }}
+  {{- end }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.ui.persistence.size }}
+{{- end }}

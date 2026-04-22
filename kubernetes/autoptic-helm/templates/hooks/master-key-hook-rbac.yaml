@@ -1,0 +1,50 @@
+{{- if and .Values.ui.enabled .Values.hooks.masterKey.generate (eq .Values.hooks.masterKey.strategy "pythonJob") }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "autoptic-ui.fullname" . }}-master-key-hook-sa
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    {{- include "autoptic-ui.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "autoptic-ui.fullname" . }}-master-key-hook-role
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    {{- include "autoptic-ui.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get", "create", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "autoptic-ui.fullname" . }}-master-key-hook-binding
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    {{- include "autoptic-ui.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "autoptic-ui.fullname" . }}-master-key-hook-role
+subjects:
+- kind: ServiceAccount
+  name: {{ include "autoptic-ui.fullname" . }}-master-key-hook-sa
+  namespace: {{ .Values.namespace.name }}
+{{- end }}

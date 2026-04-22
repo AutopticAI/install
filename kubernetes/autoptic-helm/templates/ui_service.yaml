@@ -1,0 +1,23 @@
+{{- if .Values.ui.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: ui-service
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    {{- include "autoptic-ui.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.ui.service.type }}
+  ports:
+  - port: {{ .Values.ui.service.port }}
+    targetPort: {{ .Values.ui.service.port }}
+    protocol: TCP
+    {{- if or (eq .Values.ui.service.type "LoadBalancer") (eq .Values.ui.service.type "NodePort") }}
+    nodePort: {{ .Values.ui.service.nodePort | default nil }}
+    {{- end }}
+  selector:
+    {{- include "autoptic-ui.selectorLabels" . | nindent 4 }}
+  {{- if or (eq .Values.ui.service.type "LoadBalancer") (eq .Values.ui.service.type "NodePort") }}
+  externalTrafficPolicy: {{ .Values.ui.service.externalTrafficPolicy | default "Cluster" }}
+  {{- end }}
+{{- end }}

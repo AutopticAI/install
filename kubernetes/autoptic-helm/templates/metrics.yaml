@@ -1,0 +1,159 @@
+{{- if .Values.metrics.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: metrics-deployment
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    app: myapp
+    component: metrics
+    {{- include "vectors-helm.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.metrics.replicas }}
+  selector:
+    matchLabels:
+      app: myapp
+      component: metrics
+  template:
+    metadata:
+      labels:
+        app: myapp
+        component: metrics
+        {{- include "vectors-helm.labels" . | nindent 8 }}
+    spec:
+      securityContext:
+        {{- toYaml .Values.metrics.securityContext | nindent 8 }}
+      {{- if .Values.metrics.persistence.enabled }}
+      initContainers:
+        - name: fix-permissions
+          image: busybox:latest
+          command: ['sh', '-c']
+          args:
+            - |
+              echo "=== Starting permission fix for Qdrant ==="
+              # Qdrant uses ./snapshots/tmp relative to /qdrant working directory
+              # So we need to create /qdrant/snapshots/tmp (not in storage)
+              echo "Creating snapshots directory in container filesystem..."
+              mkdir -p /qdrant/snapshots/tmp || true
+              chown -R 1000:1000 /qdrant/snapshots || true
+              find /qdrant/snapshots -type d -exec chmod 755 {} \; || true
+              find /qdrant/snapshots -type f -exec chmod 644 {} \; || true
+              # Also create in storage (for persistent snapshots if configured)
+              echo "Setting up storage directory..."
+              mkdir -p /qdrant/storage || true
+              mkdir -p /qdrant/storage/snapshots/tmp || true
+              mkdir -p /qdrant/storage/collections || true
+              # Fix ownership recursively
+              echo "Fixing ownership..."
+              chown -R 1000:1000 /qdrant/storage || echo "Warning: chown had some issues, continuing..."
+              # Set directory permissions
+              echo "Setting directory permissions..."
+              find /qdrant/storage -type d -exec chmod 755 {} \; || true
+              # Set file permissions  
+              echo "Setting file permissions..."
+              find /qdrant/storage -type f -exec chmod 644 {} \; || true
+              # Ensure snapshots directories are writable by owner
+              echo "Setting snapshots directory permissions..."
+              find /qdrant/storage/snapshots -type d -exec chmod 755 {} \; || true
+              find /qdrant/storage/snapshots -type f -exec chmod 644 {} \; || true
+              # Create init file indicator that Qdrant expects
+              echo "Creating init file indicator..."
+              touch /qdrant/storage/.qdrant_initialized || true
+              chown 1000:1000 /qdrant/storage/.qdrant_initialized || true
+              chmod 644 /qdrant/storage/.qdrant_initialized || true
+              # Test write access in both locations
+              echo "Testing write access..."
+              if touch /qdrant/snapshots/tmp/.test_write 2>/dev/null; then
+                rm -f /qdrant/snapshots/tmp/.test_write
+                echo "✓ Write test successful in /qdrant/snapshots/tmp"
+              else
+                echo "✗ Write test failed in /qdrant/snapshots/tmp"
+              fi
+              if touch /qdrant/storage/snapshots/tmp/.test_write 2>/dev/null; then
+                rm -f /qdrant/storage/snapshots/tmp/.test_write
+                echo "✓ Write test successful in /qdrant/storage/snapshots/tmp"
+              else
+                echo "✗ Write test failed in /qdrant/storage/snapshots/tmp"
+              fi
+              # Verify final state
+              echo "=== Final directory permissions ==="
+              ls -lad /qdrant/snapshots || true
+              ls -lad /qdrant/snapshots/tmp || true
+              ls -lad /qdrant/storage || true
+              ls -lad /qdrant/storage/snapshots || true
+              echo "=== Permission fix completed ==="
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+          volumeMounts:
+            - name: qdrant-storage
+              mountPath: /qdrant/storage
+            - name: qdrant-snapshots
+              mountPath: /qdrant/snapshots
+      {{- end }}
+      containers:
+        - name: metrics
+          image: {{ .Values.metrics.image | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.metrics.containerSecurityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.metrics.resources | nindent 12 }}
+          ports:
+            - containerPort: 6333
+              name: qdrant-http
+            - containerPort: 6334
+              name: qdrant-grpc
+          volumeMounts:
+            - name: qdrant-storage
+              mountPath: /qdrant/storage
+            - name: qdrant-snapshots
+              mountPath: /qdrant/snapshots
+          livenessProbe:
+            httpGet:
+              path: /collections
+              port: 6333
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /collections
+              port: 6333
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+      {{- if .Values.metrics.persistence.enabled }}
+      volumes:
+        - name: qdrant-storage
+          persistentVolumeClaim:
+            claimName: {{ include "autoptic-server.fullname" . }}-metrics-pvc
+        - name: qdrant-snapshots
+          emptyDir: {}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: metrics-service
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    app: myapp
+    component: metrics
+    {{- include "vectors-helm.labels" . | nindent 4 }}
+spec:
+  selector:
+    app: myapp
+    component: metrics
+  ports:
+    - name: qdrant-http
+      protocol: TCP
+      port: {{ .Values.metrics.service.ports.http }}
+      targetPort: 6333
+    - name: qdrant-grpc
+      protocol: TCP
+      port: {{ .Values.metrics.service.ports.grpc }}
+      targetPort: 6334
+{{- end }}

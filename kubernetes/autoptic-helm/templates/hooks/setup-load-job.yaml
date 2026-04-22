@@ -1,0 +1,51 @@
+{{- if and .Values.setup.enabled .Values.setup.load.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "autoptic-server.fullname" . }}-setup-load
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    {{- include "autoptic-server.labels" . | nindent 4 }}
+    component: setup-load
+  annotations:
+    helm.sh/hook: post-install
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded,hook-failed
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: {{ .Values.setup.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "autoptic-server.labels" . | nindent 8 }}
+        component: setup-load
+    spec:
+      serviceAccountName: {{ include "autoptic-server.serviceAccountName" . }}
+      restartPolicy: Never
+      containers:
+      - name: setup-load
+        image: {{ .Values.setup.image }}
+        imagePullPolicy: {{ .Values.setup.imagePullPolicy }}
+        args:
+        - "setup"
+        - "--load"
+        - "/server/config.json"
+        env:
+        {{- include "autoptic-server.awsEnvBlock" . | nindent 8 }}
+        volumeMounts:
+        - name: config
+          mountPath: /server/config.json
+          subPath: config.json
+          readOnly: true
+        resources:
+          requests:
+            cpu: "250m"
+            memory: "256Mi"
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
+      volumes:
+      - name: config
+        configMap:
+          name: {{ include "autoptic-server.configMapName" . }}
+{{- end }}

@@ -1,0 +1,234 @@
+{{- if and .Values.setup.enabled .Values.setup.prepare.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "autoptic-server.fullname" . }}-setup-prepare
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    {{- include "autoptic-server.labels" . | nindent 4 }}
+    component: setup-prepare
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded,hook-failed
+spec:
+  backoffLimit: 1
+  activeDeadlineSeconds: {{ .Values.setup.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "autoptic-server.labels" . | nindent 8 }}
+        component: setup-prepare
+    spec:
+      serviceAccountName: {{ include "autoptic-server.fullname" . }}-setup-prepare-sa
+      restartPolicy: Never
+      volumes:
+      - name: shared
+        emptyDir: {}
+      - name: namespace
+        downwardAPI:
+          items:
+          - path: "namespace"
+            fieldRef:
+              fieldPath: metadata.namespace
+      initContainers:
+      - name: prepare
+        image: {{ .Values.setup.image }}
+        imagePullPolicy: {{ .Values.setup.imagePullPolicy }}
+        env:
+        - name: TENANT_SHORT_NAME
+          value: {{ .Values.setup.tenantShortName | quote }}
+        - name: AWS_REGION
+          value: {{ .Values.api.env.awsRegion | quote }}
+        - name: AWS_DEFAULT_REGION
+          value: {{ .Values.api.env.awsRegion | quote }}
+        command:
+        - /bin/sh
+        - -c
+        - |
+          set -eu
+
+          CONFIG_PATH="/shared/config.json"
+
+          # Generate config using setup --prepare
+          echo "[prepare] Running setup --prepare for tenant ${TENANT_SHORT_NAME}"
+          run_prepare() {
+            # shellcheck disable=SC2068
+            "$@" > /tmp/setup-prepare.out 2> /tmp/setup-prepare.err
+          }
+          print_prepare_logs() {
+            echo "[prepare] ---- setup stdout ----"
+            cat /tmp/setup-prepare.out || true
+            echo "[prepare] ---- setup stderr ----"
+            cat /tmp/setup-prepare.err || true
+          }
+          if [ -x /server/api-server ]; then
+            echo "[prepare] Using /server/api-server binary"
+            if ! run_prepare /server/api-server setup --prepare "${TENANT_SHORT_NAME}"; then
+              echo "[prepare] First attempt failed: /server/api-server setup --prepare \"${TENANT_SHORT_NAME}\""
+              print_prepare_logs
+              echo "[prepare] Retrying: /server/api-server setup --prepare=${TENANT_SHORT_NAME}"
+              if ! run_prepare /server/api-server setup --prepare="${TENANT_SHORT_NAME}"; then
+                echo "[prepare] Second attempt failed."
+                print_prepare_logs
+                echo "[prepare] Retrying: /server/api-server setup prepare ${TENANT_SHORT_NAME}"
+                if ! run_prepare /server/api-server setup prepare "${TENANT_SHORT_NAME}"; then
+                  echo "[prepare] Third attempt failed."
+                  print_prepare_logs
+                  echo "[prepare] Retrying: /server/api-server setup -prepare ${TENANT_SHORT_NAME}"
+                  if ! run_prepare /server/api-server setup -prepare "${TENANT_SHORT_NAME}"; then
+                    echo "[prepare] All setup prepare attempts failed."
+                    print_prepare_logs
+                    exit 1
+                  fi
+                fi
+              fi
+            fi
+          elif command -v setup >/dev/null 2>&1; then
+            echo "[prepare] Using setup from PATH"
+            if ! run_prepare setup --prepare "${TENANT_SHORT_NAME}"; then
+              echo "[prepare] setup from PATH failed."
+              print_prepare_logs
+              exit 1
+            fi
+          elif [ -x /server/server ]; then
+            echo "[prepare] Using /server/server binary"
+            if ! run_prepare /server/server setup --prepare "${TENANT_SHORT_NAME}"; then
+              echo "[prepare] /server/server setup failed."
+              print_prepare_logs
+              exit 1
+            fi
+          elif [ -x /app/server ]; then
+            echo "[prepare] Using /app/server binary"
+            if ! run_prepare /app/server setup --prepare "${TENANT_SHORT_NAME}"; then
+              echo "[prepare] /app/server setup failed."
+              print_prepare_logs
+              exit 1
+            fi
+          else
+            echo "[prepare] Error: could not find setup command in image"
+            echo "[prepare] PATH=${PATH}"
+            ls -la / || true
+            ls -la /server || true
+            ls -la /app || true
+            exit 1
+          fi
+          cp /tmp/setup-prepare.out "${CONFIG_PATH}"
+
+          echo "[prepare] Config generation complete"
+          cat "${CONFIG_PATH}"
+        volumeMounts:
+        - name: shared
+          mountPath: /shared
+      containers:
+      - name: apply
+        image: {{ .Values.setup.applyImage | default "python:3.11-slim" }}
+        imagePullPolicy: {{ .Values.setup.applyImagePullPolicy | default "IfNotPresent" }}
+        env:
+        - name: NAMESPACE
+          value: {{ .Values.namespace.name | quote }}
+        - name: INSTANCE_ID_SECRET_NAME
+          value: {{ .Values.setup.instanceIdSecretName | quote }}
+        - name: CONFIGMAP_NAME
+          value: {{ include "autoptic-server.configMapName" . | quote }}
+        - name: TENANT_SHORT_NAME
+          value: {{ .Values.setup.tenantShortName | quote }}
+        command:
+        - /bin/sh
+        - -c
+        - |
+          set -eu
+          python3 -m pip install --no-cache-dir --disable-pip-version-check requests
+          python3 - <<'PY'
+          import base64
+          import json
+          import os
+          import requests
+
+          namespace = os.environ["NAMESPACE"]
+          configmap_name = os.environ["CONFIGMAP_NAME"]
+          instance_secret_name = os.environ["INSTANCE_ID_SECRET_NAME"]
+          tenant_short_name = os.environ["TENANT_SHORT_NAME"]
+
+          with open("/shared/config.json", "r", encoding="utf-8") as f:
+              config_text = f.read()
+          config_json = json.loads(config_text)
+          instance_id = (config_json.get("instance") or {}).get("id", "")
+          if not instance_id:
+              raise RuntimeError("could not parse instance.id from generated config.json")
+
+          host = os.environ.get("KUBERNETES_SERVICE_HOST")
+          port = os.environ.get("KUBERNETES_SERVICE_PORT_HTTPS", "443")
+          token_path = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+          ca_path = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+
+          with open(token_path, "r", encoding="utf-8") as f:
+              token = f.read().strip()
+
+          session = requests.Session()
+          session.verify = ca_path
+          session.headers.update({
+              "Authorization": f"Bearer {token}",
+              "Accept": "application/json",
+              "Content-Type": "application/json",
+          })
+          timeout = 20
+          base = f"https://{host}:{port}/api/v1/namespaces/{namespace}"
+
+          def b64(s: str) -> str:
+              return base64.b64encode(s.encode("utf-8")).decode("utf-8")
+
+          cm_url = f"{base}/configmaps/{configmap_name}"
+          sec_url = f"{base}/secrets/{instance_secret_name}"
+
+          cm_resp = session.get(cm_url, timeout=timeout)
+          sec_resp = session.get(sec_url, timeout=timeout)
+
+          print(f"[apply] Applying ConfigMap {configmap_name}...")
+          cm_body = {
+              "apiVersion": "v1",
+              "kind": "ConfigMap",
+              "metadata": {"name": configmap_name, "namespace": namespace},
+              "data": {
+                  "config.json": config_text,
+                  "AUTOPTIC_INSTANCE_ID": instance_id,
+                  "AUTOPTIC_TENANT_SHORT_NAME": tenant_short_name,
+              },
+          }
+          if cm_resp.status_code == 404:
+              create_cm = session.post(f"{base}/configmaps", data=json.dumps(cm_body), timeout=timeout)
+              create_cm.raise_for_status()
+          elif cm_resp.status_code == 200:
+              replace_cm = session.put(cm_url, data=json.dumps(cm_body), timeout=timeout)
+              replace_cm.raise_for_status()
+          else:
+              cm_resp.raise_for_status()
+
+          print(f"[apply] Applying Secret {instance_secret_name}...")
+          sec_body = {
+              "apiVersion": "v1",
+              "kind": "Secret",
+              "metadata": {"name": instance_secret_name, "namespace": namespace},
+              "type": "Opaque",
+              "data": {
+                  "instance-id": b64(instance_id),
+                  "tenant-short-name": b64(tenant_short_name),
+              },
+          }
+          if sec_resp.status_code == 404:
+              create_sec = session.post(f"{base}/secrets", data=json.dumps(sec_body), timeout=timeout)
+              create_sec.raise_for_status()
+          elif sec_resp.status_code == 200:
+              replace_sec = session.put(sec_url, data=json.dumps(sec_body), timeout=timeout)
+              replace_sec.raise_for_status()
+          else:
+              sec_resp.raise_for_status()
+
+          print("[apply] Setup prepare complete.")
+          print(f"[apply] Instance ID: {instance_id}")
+          print(f"[apply] Tenant: {tenant_short_name}")
+          PY
+        volumeMounts:
+        - name: shared
+          mountPath: /shared
+{{- end }}

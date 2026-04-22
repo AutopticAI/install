@@ -1,0 +1,114 @@
+{{- if .Values.scheduler.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "autoptic-server.fullname" . }}-scheduler
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    {{- include "autoptic-server.scheduler.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.scheduler.replicas }}
+  selector:
+    matchLabels:
+      {{- include "autoptic-server.scheduler.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.scheduler.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "autoptic-server.scheduler.labels" . | nindent 8 }}
+        {{- with .Values.scheduler.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "autoptic-server.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- if .Values.scheduler.waitForApi.enabled }}
+      initContainers:
+      - name: wait-for-api
+        image: busybox:1.35
+        command:
+        - sh
+        - -c
+        - |
+          echo "Waiting for API to be ready..."
+          {{- $serviceName := default (printf "%s-api" (include "autoptic-server.fullname" .)) .Values.api.service.name }}
+          {{- $apiUrl := .Values.scheduler.waitForApi.url | default (printf "http://%s.%s.svc.cluster.local:%v/health" $serviceName .Values.namespace.name (.Values.api.service.port | int)) }}
+          until wget --spider -q -T 5 {{ $apiUrl }}; do
+            echo "API is not ready yet. Retrying in {{ .Values.scheduler.waitForApi.initialDelaySeconds }}s..."
+            sleep {{ .Values.scheduler.waitForApi.initialDelaySeconds }}
+          done
+          echo "API is ready!"
+        env:
+        - name: TIMEOUT
+          value: {{ .Values.scheduler.waitForApi.timeout | quote }}
+      {{- end }}
+      containers:
+      - name: scheduler
+        image: "{{ .Values.scheduler.image }}"
+        imagePullPolicy: {{ .Values.scheduler.imagePullPolicy }}
+        args:
+          - "scheduler"
+          - "-config"
+          - "/server/config.json"
+        env:
+        - name: AWS_REGION
+          value: {{ .Values.scheduler.env.awsRegion | quote }}
+        {{- if .Values.scheduler.env.apiToken }}
+        - name: AUTOPTIC_API_TOKEN
+          value: {{ .Values.scheduler.env.apiToken | quote }}
+        {{- end }}
+        {{- if .Values.awsSecret.enabled }}
+        - name: AWS_ACCESS_KEY_ID
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.awsSecret.name }}
+              key: AWS_ACCESS_KEY_ID
+        - name: AWS_SECRET_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.awsSecret.name }}
+              key: AWS_SECRET_ACCESS_KEY
+        {{- end }}
+        {{- if .Values.config.extraData.AUTOPTIC_INSTANCE_ID }}
+        - name: AUTOPTIC_INSTANCE_ID
+          value: {{ .Values.config.extraData.AUTOPTIC_INSTANCE_ID | quote }}
+        {{- end }}
+        {{- if .Values.config.extraData.AUTOPTIC_TENANT_SHORT_NAME }}
+        - name: AUTOPTIC_TENANT_SHORT_NAME
+          value: {{ .Values.config.extraData.AUTOPTIC_TENANT_SHORT_NAME | quote }}
+        {{- end }}
+        volumeMounts:
+        - name: config
+          mountPath: /server/config.json
+          subPath: config.json
+          readOnly: true
+        resources:
+          {{- toYaml .Values.scheduler.resources | nindent 10 }}
+        securityContext:
+          {{- toYaml .Values.securityContext | nindent 10 }}
+      volumes:
+      - name: config
+        configMap:
+          name: {{ include "autoptic-server.configMapName" . }}
+      {{- with .Values.scheduler.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.scheduler.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.scheduler.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

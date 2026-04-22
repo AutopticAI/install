@@ -1,0 +1,17 @@
+{{- if and .Values.config.enabled (not .Values.config.useExisting) (not (and .Values.setup .Values.setup.prepare .Values.setup.prepare.enabled)) }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "autoptic-server.configMapName" . }}
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    {{- include "autoptic-server.labels" . | nindent 4 }}
+data:
+  config.json: |
+    {{- include "autoptic-server.configJson" . | nindent 4 }}
+  {{- with .Values.config.extraData }}
+  {{- range $key, $value := . }}
+  {{ $key }}: {{ $value | quote }}
+  {{- end }}
+  {{- end }}
+{{- end }}
