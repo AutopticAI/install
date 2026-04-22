@@ -184,6 +184,26 @@ spec:
           cm_resp = session.get(cm_url, timeout=timeout)
           sec_resp = session.get(sec_url, timeout=timeout)
 
+          def b64d(s: str) -> str:
+              return base64.b64decode(s.encode("utf-8")).decode("utf-8")
+
+          # Reuse persisted instance identity on upgrade so AWS resource names stay stable.
+          if sec_resp.status_code == 200:
+              existing = sec_resp.json()
+              existing_data = existing.get("data", {}) or {}
+              existing_instance_id = existing_data.get("instance-id")
+              existing_tenant_short_name = existing_data.get("tenant-short-name")
+              if existing_instance_id:
+                  instance_id = b64d(existing_instance_id)
+                  print(f"[apply] Reusing existing instance ID from Secret: {instance_id}")
+                  config_json.setdefault("instance", {})["id"] = instance_id
+              if existing_tenant_short_name:
+                  tenant_short_name = b64d(existing_tenant_short_name)
+                  print(f"[apply] Reusing existing tenant short name from Secret: {tenant_short_name}")
+                  config_json.setdefault("instance", {})["tenant_short_name"] = tenant_short_name
+              # Keep config.json consistent with the reused identity.
+              config_text = json.dumps(config_json, indent=2) + "\n"
+
           print(f"[apply] Applying ConfigMap {configmap_name}...")
           cm_body = {
               "apiVersion": "v1",

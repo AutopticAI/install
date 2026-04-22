@@ -140,6 +140,18 @@ The chart includes three pre/post-install hooks that replace the docker-compose 
 
 The instance-id is persisted across upgrades via the `autoptic-instance-id` Secret. This ensures that the same AWS resources are reused on subsequent installs.
 
+On `helm upgrade` (without uninstall), `setup-prepare` reuses the existing `instance-id` and `tenant-short-name` from that Secret and rewrites `config.json` with those values before `setup-run` executes. This prevents creating new DynamoDB tables/S3 buckets on each upgrade.
+
+Quick verification:
+
+```bash
+# Run this before and after helm upgrade; value should stay the same
+kubectl -n autoptic get secret autoptic-instance-id -o jsonpath='{.data.instance-id}' | base64 -d; echo
+
+# setup-prepare logs should mention reuse
+kubectl -n autoptic logs job/autoptic-setup-prepare | rg "Reusing existing instance ID from Secret|Instance ID:"
+```
+
 ### Manual install, upgrade, delete
 
 #### Install/Upgrade
