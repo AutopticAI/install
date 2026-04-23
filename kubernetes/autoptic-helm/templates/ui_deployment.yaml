@@ -190,6 +190,26 @@ spec:
         - name: OKTA_DOMAIN
           value: {{ .Values.ui.env.oktaDomain | quote }}
         {{- end }}
+        {{- if .Values.ui.env.duoClientId }}
+        - name: DUO_CLIENT_ID
+          value: {{ .Values.ui.env.duoClientId | quote }}
+        {{- end }}
+        {{- if or .Values.externalSecrets.duoClientSecretPath .Values.ui.secrets.duoClientSecret }}
+        - name: DUO_CLIENT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "autoptic-ui.fullname" . }}-secret
+              key: duo-client-secret
+              optional: true
+        {{- end }}
+        {{- if .Values.ui.env.duoRedirectUri }}
+        - name: DUO_REDIRECT_URI
+          value: {{ .Values.ui.env.duoRedirectUri | quote }}
+        {{- end }}
+        {{- if .Values.ui.env.duoApiHost }}
+        - name: DUO_API_HOST
+          value: {{ .Values.ui.env.duoApiHost | quote }}
+        {{- end }}
       volumes:
       {{- if .Values.ui.persistence.enabled }}
       - name: config-source

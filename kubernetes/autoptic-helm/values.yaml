@@ -149,6 +149,7 @@ ui:
     grokApiKey: ""
     googleClientSecret: ""
     oktaClientSecret: ""
+    duoClientSecret: ""
 
   securityContext:
     runAsNonRoot: true
@@ -216,6 +217,9 @@ ui:
     oktaClientId: ""
     oktaRedirectUri: ""
     oktaDomain: ""
+    duoClientId: ""
+    duoRedirectUri: ""
+    duoApiHost: ""
 
   service:
     type: ClusterIP
@@ -373,6 +377,7 @@ externalSecrets:
   webuiSecretKeyPath: "replace-me/webui-secret-key"
   googleClientSecretPath: ""
   oktaClientSecretPath: ""
+  duoClientSecretPath: ""
 
 # ============================================
 # Helm Hooks Configuration
