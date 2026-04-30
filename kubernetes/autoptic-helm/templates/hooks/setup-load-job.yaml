@@ -8,9 +8,9 @@ metadata:
     {{- include "autoptic-server.labels" . | nindent 4 }}
     component: setup-load
   annotations:
-    helm.sh/hook: post-install
-    helm.sh/hook-weight: "0"
-    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded,hook-failed
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
 spec:
   backoffLimit: 2
   activeDeadlineSeconds: {{ .Values.setup.activeDeadlineSeconds }}
@@ -22,17 +22,145 @@ spec:
     spec:
       serviceAccountName: {{ include "autoptic-server.serviceAccountName" . }}
       restartPolicy: Never
-      containers:
-      - name: setup-load
+      volumes:
+      - name: shared
+        emptyDir: {}
+      - name: state
+        emptyDir: {}
+      - name: config
+        configMap:
+          name: {{ include "autoptic-server.configMapName" . }}
+      initContainers:
+      - name: check-marker
+        image: {{ .Values.setup.applyImage | default "python:3.11-slim" }}
+        imagePullPolicy: {{ .Values.setup.applyImagePullPolicy | default "IfNotPresent" }}
+        env:
+        - name: NAMESPACE
+          value: {{ .Values.namespace.name | quote }}
+        - name: MARKER_CONFIGMAP_NAME
+          value: "autoptic-setup-state"
+        command:
+        - /bin/sh
+        - -c
+        - |
+          set -eu
+          python3 -m pip install --no-cache-dir --disable-pip-version-check requests
+          python3 - <<'PY'
+          import json
+          import os
+          import requests
+
+          namespace = os.environ["NAMESPACE"]
+          marker_cm_name = os.environ["MARKER_CONFIGMAP_NAME"]
+          state_path = "/state/skip"
+          config_path = "/shared/config.json"
+
+          # Read instance.id from mounted config.json
+          with open(config_path, "r", encoding="utf-8") as f:
+              config_json = json.load(f)
+          instance_id = (config_json.get("instance") or {}).get("id", "")
+          if not instance_id:
+              raise RuntimeError("could not parse instance.id from /shared/config.json")
+
+          host = os.environ.get("KUBERNETES_SERVICE_HOST")
+          port = os.environ.get("KUBERNETES_SERVICE_PORT_HTTPS", "443")
+          token_path = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+          ca_path = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+
+          with open(token_path, "r", encoding="utf-8") as f:
+              token = f.read().strip()
+
+          session = requests.Session()
+          session.verify = ca_path
+          session.headers.update({
+              "Authorization": f"Bearer {token}",
+              "Accept": "application/json",
+              "Content-Type": "application/json",
+          })
+          timeout = 20
+          base = f"https://{host}:{port}/api/v1/namespaces/{namespace}"
+
+          cm_url = f"{base}/configmaps/{marker_cm_name}"
+          cm_resp = session.get(cm_url, timeout=timeout)
+
+          if cm_resp.status_code == 404:
+              # Create empty marker ConfigMap
+              cm_body = {
+                  "apiVersion": "v1",
+                  "kind": "ConfigMap",
+                  "metadata": {"name": marker_cm_name, "namespace": namespace},
+                  "data": {},
+              }
+              create_resp = session.post(f"{base}/configmaps", data=json.dumps(cm_body), timeout=timeout)
+              create_resp.raise_for_status()
+              print(f"[check-marker] Created marker ConfigMap: {marker_cm_name}")
+          elif cm_resp.status_code != 200:
+              cm_resp.raise_for_status()
+
+          if cm_resp.status_code == 200:
+              existing = cm_resp.json()
+              existing_data = existing.get("data", {}) or {}
+              completed = existing_data.get("setup-load.completed")
+              completed_instance_id = existing_data.get("setup-load.instance-id")
+
+              if completed == "true" and completed_instance_id == instance_id:
+                  print(f"[check-marker] Load already completed for instance {instance_id}; skipping.")
+                  with open(state_path, "w", encoding="utf-8") as f:
+                      f.write("skip")
+              else:
+                  print(f"[check-marker] Load not completed for this instance; will proceed.")
+
+          print(f"[check-marker] Instance ID from config: {instance_id}")
+          PY
+        volumeMounts:
+        - name: shared
+          mountPath: /shared
+        - name: state
+          mountPath: /state
+        - name: config
+          mountPath: /shared/config.json
+          subPath: config.json
+          readOnly: true
+      - name: wait-api
+        image: busybox:1.35
+        command:
+        - sh
+        - -c
+        - |
+          if [ -f /state/skip ]; then
+            echo "[wait-api] Skipping: marker indicates load already completed."
+            exit 0
+          fi
+          echo "[wait-api] Waiting for API to be ready..."
+          {{- $serviceName := default (printf "%s-api" (include "autoptic-server.fullname" .)) .Values.api.service.name }}
+          {{- $apiUrl := .Values.scheduler.waitForApi.url | default (printf "http://%s.%s.svc.cluster.local:%v/health" $serviceName .Values.namespace.name (.Values.api.service.port | int)) }}
+          api_url="{{ $apiUrl }}"
+          until wget --spider -q -T 5 "$api_url"; do
+            echo "[wait-api] API is not ready yet. Retrying in 5s..."
+            sleep 5
+          done
+          echo "[wait-api] API is ready!"
+        volumeMounts:
+        - name: state
+          mountPath: /state
+      - name: run-load
         image: {{ .Values.setup.image }}
         imagePullPolicy: {{ .Values.setup.imagePullPolicy }}
-        args:
-        - "setup"
-        - "--load"
-        - "/server/config.json"
+        command:
+        - /bin/sh
+        - -c
+        - |
+          if [ -f /state/skip ]; then
+            echo "[run-load] Skipping: marker indicates load already completed."
+            exit 0
+          fi
+          echo "[run-load] Running setup --load /server/config.json"
+          exec /server/api-server setup --load /server/config.json
         env:
         {{- include "autoptic-server.awsEnvBlock" . | nindent 8 }}
         volumeMounts:
+        - name: state
+          mountPath: /state
         - name: config
           mountPath: /server/config.json
           subPath: config.json
@@ -44,8 +172,101 @@ spec:
           limits:
             cpu: "500m"
             memory: "512Mi"
-      volumes:
-      - name: config
-        configMap:
-          name: {{ include "autoptic-server.configMapName" . }}
+      containers:
+      - name: patch-marker
+        image: {{ .Values.setup.applyImage | default "python:3.11-slim" }}
+        imagePullPolicy: {{ .Values.setup.applyImagePullPolicy | default "IfNotPresent" }}
+        env:
+        - name: NAMESPACE
+          value: {{ .Values.namespace.name | quote }}
+        - name: MARKER_CONFIGMAP_NAME
+          value: "autoptic-setup-state"
+        command:
+        - /bin/sh
+        - -c
+        - |
+          set -eu
+          if [ -f /state/skip ]; then
+            echo "[patch-marker] Skipping: load was already completed for this instance."
+            exit 0
+          fi
+          python3 -m pip install --no-cache-dir --disable-pip-version-check requests
+          python3 - <<'PY'
+          import base64
+          import json
+          import os
+          import requests
+          from datetime import datetime, timezone
+
+          namespace = os.environ["NAMESPACE"]
+          marker_cm_name = os.environ["MARKER_CONFIGMAP_NAME"]
+          config_path = "/shared/config.json"
+
+          # Read instance.id from mounted config.json
+          with open(config_path, "r", encoding="utf-8") as f:
+              config_json = json.load(f)
+          instance_id = (config_json.get("instance") or {}).get("id", "")
+          if not instance_id:
+              raise RuntimeError("could not parse instance.id from /shared/config.json")
+
+          host = os.environ.get("KUBERNETES_SERVICE_HOST")
+          port = os.environ.get("KUBERNETES_SERVICE_PORT_HTTPS", "443")
+          token_path = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+          ca_path = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+
+          with open(token_path, "r", encoding="utf-8") as f:
+              token = f.read().strip()
+
+          session = requests.Session()
+          session.verify = ca_path
+          session.headers.update({
+              "Authorization": f"Bearer {token}",
+              "Accept": "application/json",
+              "Content-Type": "application/json",
+          })
+          timeout = 20
+          base = f"https://{host}:{port}/api/v1/namespaces/{namespace}"
+          cm_url = f"{base}/configmaps/{marker_cm_name}"
+
+          cm_resp = session.get(cm_url, timeout=timeout)
+          if cm_resp.status_code not in (200, 404):
+              cm_resp.raise_for_status()
+
+          patch_data = {
+              "data": {
+                  "setup-load.completed": "true",
+                  "setup-load.instance-id": instance_id,
+                  "setup-load.completed-at": datetime.now(timezone.utc).isoformat(),
+              }
+          }
+
+          if cm_resp.status_code == 404:
+              cm_body = {
+                  "apiVersion": "v1",
+                  "kind": "ConfigMap",
+                  "metadata": {"name": marker_cm_name, "namespace": namespace},
+                  "data": patch_data["data"],
+              }
+              create_resp = session.post(f"{base}/configmaps", data=json.dumps(cm_body), timeout=timeout)
+              create_resp.raise_for_status()
+              print(f"[patch-marker] Created marker ConfigMap with completion data.")
+          else:
+              current = cm_resp.json()
+              current_data = current.get("data", {}) or {}
+              current_data.update(patch_data["data"])
+              current["data"] = current_data
+              put_resp = session.put(cm_url, data=json.dumps(current), timeout=timeout)
+              put_resp.raise_for_status()
+              print(f"[patch-marker] Updated marker ConfigMap with completion data.")
+
+          print(f"[patch-marker] Instance ID: {instance_id}")
+          print(f"[patch-marker] Setup load marked as completed.")
+          PY
+        volumeMounts:
+        - name: state
+          mountPath: /state
+        - name: config
+          mountPath: /shared/config.json
+          subPath: config.json
+          readOnly: true
 {{- end }}
