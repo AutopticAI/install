@@ -90,6 +90,41 @@ spec:
               mountPath: /qdrant/storage
             - name: qdrant-snapshots
               mountPath: /qdrant/snapshots
+        - name: seed-qdrant-storage
+          image: {{ .Values.metrics.image | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ['sh', '-c']
+          args:
+            - |
+              set -eu
+              echo "=== Qdrant PVC seed check ==="
+              TARGET="/qdrant/storage-pvc"
+              SOURCE="/qdrant/storage"
+
+              mkdir -p "${TARGET}/collections" || true
+
+              if [ -n "$(ls -A "${TARGET}/collections" 2>/dev/null || true)" ]; then
+                echo "PVC already contains collections, skipping seed."
+                exit 0
+              fi
+
+              if [ ! -d "${SOURCE}/collections" ] || [ -z "$(ls -A "${SOURCE}/collections" 2>/dev/null || true)" ]; then
+                echo "No baked collections found in image at ${SOURCE}/collections; skipping seed."
+                exit 0
+              fi
+
+              echo "Seeding PVC from image-baked Qdrant storage..."
+              cp -a "${SOURCE}/." "${TARGET}/"
+              chown -R 1000:1000 "${TARGET}" || true
+              find "${TARGET}" -type d -exec chmod 755 {} \; || true
+              find "${TARGET}" -type f -exec chmod 644 {} \; || true
+              echo "PVC seed completed."
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+          volumeMounts:
+            - name: qdrant-storage
+              mountPath: /qdrant/storage-pvc
       {{- end }}
       containers:
         - name: metrics

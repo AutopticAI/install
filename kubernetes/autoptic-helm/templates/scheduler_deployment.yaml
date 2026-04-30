@@ -78,14 +78,7 @@ spec:
               name: {{ .Values.awsSecret.name }}
               key: AWS_SECRET_ACCESS_KEY
         {{- end }}
-        {{- if .Values.config.extraData.AUTOPTIC_INSTANCE_ID }}
-        - name: AUTOPTIC_INSTANCE_ID
-          value: {{ .Values.config.extraData.AUTOPTIC_INSTANCE_ID | quote }}
-        {{- end }}
-        {{- if .Values.config.extraData.AUTOPTIC_TENANT_SHORT_NAME }}
-        - name: AUTOPTIC_TENANT_SHORT_NAME
-          value: {{ .Values.config.extraData.AUTOPTIC_TENANT_SHORT_NAME | quote }}
-        {{- end }}
+        {{- include "autoptic-server.instanceEnvBlock" . | nindent 8 }}
         volumeMounts:
         - name: config
           mountPath: /server/config.json

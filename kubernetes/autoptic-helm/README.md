@@ -79,6 +79,10 @@ The chart supports two authentication methods:
 
 **Important:** Use an AWS region other than `us-east-1` for production workloads. The chart defaults to `us-west-2`.
 
+### Chart Variants
+
+This is the **automated** chart (`autoptic-helm`) that provisions AWS resources in-cluster. For a **BYO (bring-your-own)** flow where you pre-provision AWS resources using Docker commands, see the sibling chart: [`install/kubernetes/autoptic-helm-byo`](../autoptic-helm-byo/).
+
 ### Quick Start
 
 With IRSA (recommended for EKS):
@@ -134,13 +138,50 @@ Access points (when using ClusterIP + port-forward):
 
 The chart includes three pre/post-install hooks that replace the docker-compose installation steps:
 
-1. **setup-prepare** (pre-install, pre-upgrade): Runs `server setup --prepare <tenant>` to generate `config.json`, creates the ConfigMap, and persists the instance-id in a Secret.
-2. **setup-run** (pre-install, pre-upgrade): Runs `server setup --run` to create DynamoDB tables and S3 bucket (idempotent).
-3. **setup-load** (post-install only): Runs `server setup --load` to load sample content (environments, PQL queries, briefs).
+1. **setup-prepare** (pre-install): Runs `server setup --prepare <tenant>` to generate `config.json`, creates the ConfigMap, and persists the instance-id in a Secret.
+2. **setup-run** (pre-install): Runs `server setup --run` to create DynamoDB tables and S3 bucket (idempotent). **Note:** This hook only runs on first install, not on upgrades.
+3. **setup-load** (post-install, post-upgrade): Runs `server setup --load` to load sample content (environments, PQL queries, briefs). This hook is **marker-aware** - it tracks completion per instance-id and skips if already loaded.
 
 The instance-id is persisted across upgrades via the `autoptic-instance-id` Secret. This ensures that the same AWS resources are reused on subsequent installs.
 
-On `helm upgrade` (without uninstall), `setup-prepare` reuses the existing `instance-id` and `tenant-short-name` from that Secret and rewrites `config.json` with those values before `setup-run` executes. This prevents creating new DynamoDB tables/S3 buckets on each upgrade.
+On `helm upgrade` (without uninstall), `setup-prepare` reuses the existing `instance-id` and `tenant-short-name` from that Secret and rewrites `config.json` with those values. This prevents creating new DynamoDB tables/S3 buckets on each upgrade.
+
+#### Marker-Aware Setup Load
+
+The `setup-load` hook uses a marker ConfigMap (`autoptic-setup-state`) to track whether sample content has already been loaded for the current instance-id. This provides:
+
+- **Idempotency**: Re-running Helm install/upgrade won't duplicate sample content
+- **Safety**: The marker survives `helm uninstall` (it's not Helm-managed), so accidental reinstalls don't re-create data
+- **Control**: You can force a re-run by resetting the marker
+
+**Manual rerun of setup-load:**
+
+```bash
+# Reset the marker to force re-run on next install/upgrade
+kubectl -n autoptic patch configmap autoptic-setup-state --type merge -p '{"data":{"setup-load.completed":"false"}}'
+
+# Or delete the marker ConfigMap entirely
+kubectl -n autoptic delete configmap autoptic-setup-state
+```
+
+**Marker keys:**
+- `setup-load.completed`: `"true"` when load completed
+- `setup-load.instance-id`: Instance ID that was loaded
+- `setup-load.completed-at`: ISO8601 timestamp of completion
+
+#### Migration: Stricter Schema Verification
+
+Current `autoptic/server` images perform stricter schema verification during `setup --run`:
+
+- **PQL and BriefRecord tables**: Missing GSIs are auto-reconciled (created and re-verified)
+- **Environment, Token, Brief, Secrets tables**: Any schema mismatch fails with an actionable error requiring manual remediation
+
+Because `setup --run` only runs on first install (not upgrades), existing clusters won't be affected during normal upgrades. If you need to verify schema before a fresh install:
+
+```bash
+# Optional preflight before running setup --run
+docker run --rm -v "$PWD:/work" -w /work autoptic/server:latest setup --verify-schema /work/config.json
+```
 
 Quick verification:
 
@@ -298,11 +339,18 @@ helm upgrade --install autoptic . \
 
 **Manual re-run of setup --load:**
 
-The load hook runs only on post-install (not upgrades). To manually re-run it:
+The load hook runs on post-install and post-upgrade, but is skipped if the marker ConfigMap indicates completion for the current instance. To force a re-run:
 
 ```bash
-kubectl -n autoptic create job manual-setup-load \
-  --from=cronjob/autoptic-setup-load
+# Reset the marker and trigger a hook re-run by upgrading with --wait
+kubectl -n autoptic patch configmap autoptic-setup-state --type merge -p '{"data":{"setup-load.completed":"false"}}'
+helm upgrade --install autoptic . -n autoptic --wait --wait-for-jobs
+```
+
+To run setup-load manually (outside Helm):
+
+```bash
+kubectl -n autoptic exec deploy/autoptic-api -- /server/api-server setup --load /server/config.json
 ```
 
 ### New Values (added in v0.3.0)

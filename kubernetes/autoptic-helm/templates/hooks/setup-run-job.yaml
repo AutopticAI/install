@@ -8,7 +8,7 @@ metadata:
     {{- include "autoptic-server.labels" . | nindent 4 }}
     component: setup-run
   annotations:
-    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook: pre-install
     helm.sh/hook-weight: "10"
     helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
 spec:

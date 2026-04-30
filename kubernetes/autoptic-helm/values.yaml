@@ -130,9 +130,10 @@ config:
   configJson: {}
   # configJsonString: |
   #   { "server": {"port": "9999"} }
-  extraData:
-    AUTOPTIC_INSTANCE_ID: "replace-me-instance-id"
-    AUTOPTIC_TENANT_SHORT_NAME: "replace-me-tenant"
+  extraData: {}
+    # Identity values are populated by setup hooks (auto chart) or user-provided ConfigMap (BYO chart).
+    # Do not set AUTOPTIC_INSTANCE_ID or AUTOPTIC_TENANT_SHORT_NAME here.
+    # Pods read these from the autoptic-config ConfigMap via configMapKeyRef.
 
 # ============================================
 # UI Configuration
