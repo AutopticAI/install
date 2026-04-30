@@ -1,0 +1,65 @@
+Autoptic Server has been installed!
+
+Release name: {{ .Release.Name }}
+Namespace: {{ .Values.namespace.name }}
+
+Components deployed:
+{{- if .Values.api.enabled }}
+- API Server: {{ .Values.api.replicas }} replica(s)
+{{- end }}
+{{- if .Values.scheduler.enabled }}
+- Scheduler: {{ .Values.scheduler.replicas }} replica(s)
+{{- end }}
+
+{{- if .Values.api.enabled }}
+
+To access the API server:
+
+{{- if contains "LoadBalancer" .Values.api.service.type }}
+  NOTE: It may take a few minutes for the LoadBalancer IP to be available.
+
+  Watch the status:
+    kubectl get svc --namespace {{ .Values.namespace.name }} {{ include "autoptic-server.fullname" . }}-api -w
+
+  Get the service URL:
+    export SERVICE_IP=$(kubectl get svc --namespace {{ .Values.namespace.name }} {{ include "autoptic-server.fullname" . }}-api --template "{{"{{ range (index .status.loadBalancer.ingress 0) }}{{.}}{{ end }}"}}")
+    echo "API URL: http://$SERVICE_IP:{{ .Values.api.service.port }}"
+    echo "Health: http://$SERVICE_IP:{{ .Values.api.service.port }}/health"
+
+{{- else if contains "ClusterIP" .Values.api.service.type }}
+  Use port-forward to access the API:
+    kubectl --namespace {{ .Values.namespace.name }} port-forward svc/{{ include "autoptic-server.fullname" . }}-api {{ .Values.api.service.port }}:{{ .Values.api.service.port }}
+
+  Then visit:
+    http://localhost:{{ .Values.api.service.port }}/health
+
+{{- else if contains "NodePort" .Values.api.service.type }}
+  export NODE_PORT=$(kubectl get --namespace {{ .Values.namespace.name }} -o jsonpath="{.spec.ports[0].nodePort}" services {{ include "autoptic-server.fullname" . }}-api)
+  export NODE_IP=$(kubectl get nodes --namespace {{ .Values.namespace.name }} -o jsonpath="{.items[0].status.addresses[0].address}")
+  echo "API URL: http://$NODE_IP:$NODE_PORT"
+{{- end }}
+
+{{- end }}
+
+{{- if .Values.scheduler.enabled }}
+
+To check scheduler logs:
+  kubectl --namespace {{ .Values.namespace.name }} logs -l app.kubernetes.io/component=scheduler --tail=100 -f
+
+{{- end }}
+
+Useful commands:
+
+  # Check all pods
+  kubectl get pods --namespace {{ .Values.namespace.name }}
+
+  # View API logs
+  kubectl logs --namespace {{ .Values.namespace.name }} -l app.kubernetes.io/component=api --tail=100 -f
+
+  # View configuration
+  kubectl get configmap --namespace {{ .Values.namespace.name }} {{ include "autoptic-server.configMapName" . }} -o yaml
+
+  # Test API health
+  kubectl run test-api --rm -it --restart=Never --image=busybox:1.35 --namespace {{ .Values.namespace.name }} -- wget -O- http://{{ include "autoptic-server.fullname" . }}-api:{{ .Values.api.service.port }}/health
+
+For more information, visit the chart documentation.

@@ -1,0 +1,31 @@
+1. autoptic-ui: Gateway API with Ingress Fallback
+values.yaml - Added new ui.gateway block (enabled by default) with:
+
+createGateway: false - render optional Gateway resource
+parentRefs - reference to existing Gateway
+hostnames, rules - HTTPRoute matching rules
+listeners, annotations - optional Gateway configuration
+Added fallback comment to ui.ingress section
+templates/httproute.yaml - New template for Gateway API HTTPRoute with fail-fast validation
+
+templates/gateway.yaml - New template for optional Gateway resource (rendered when createGateway: true)
+
+templates/ingress.yaml - Added header comment noting it's the fallback path
+
+Environment values files (values-dev.yaml, values-dev-updated.yaml, values-staging.yaml):
+
+Added gateway.enabled: false to maintain mutual exclusivity with existing ingress.enabled: true
+2. vectors-helm: Enhanced PVC Configuration
+values.yaml - Extended metrics.persistence with:
+
+accessMode: ReadWriteOnce - configurable access mode
+annotations: {} - PVC metadata annotations
+selector: {} - for pre-provisioned PV binding
+volumeName: "" - optional static PV binding
+templates/pvc-metrics.yaml - Updated to consume all new fields while maintaining backwards compatibility with defaults
+
+Key Behaviors
+Mutual Exclusion: The chart fails fast if both ui.ingress.enabled and ui.gateway.enabled are true
+Default Routing: New deployments use Gateway API (HTTPRoute) by default
+Ingress Reactivation: Set ui.gateway.enabled: false and ui.ingress.enabled: true to revert to Ingress
+PVC Backwards Compatibility: All new PVC fields have defaults matching previous hardcoded values

@@ -1,0 +1,164 @@
+{{- if and .Values.ui.enabled .Values.hooks.masterKey.generate (eq .Values.hooks.masterKey.strategy "pythonJob") }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "autoptic-ui.fullname" . }}-master-key-hook
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    {{- include "autoptic-ui.labels" . | nindent 4 }}
+    component: master-key-hook
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 1
+  activeDeadlineSeconds: {{ .Values.hooks.masterKey.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "autoptic-ui.labels" . | nindent 8 }}
+        component: master-key-hook
+    spec:
+      serviceAccountName: {{ include "autoptic-ui.fullname" . }}-master-key-hook-sa
+      restartPolicy: Never
+      containers:
+      - name: generate-master-key
+        image: {{ .Values.hooks.masterKey.image }}
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: NAMESPACE
+          value: {{ .Values.namespace.name | quote }}
+        - name: SECRET_NAME
+          value: {{ printf "%s-secret" (include "autoptic-ui.fullname" .) | quote }}
+        - name: EXTERNAL_SECRETS_ENABLED
+          value: {{ .Values.externalSecrets.enabled | quote }}
+        - name: WEBUI_SECRET_KEY
+          value: {{ .Values.ui.secrets.webuiSecretKey | quote }}
+        - name: OPENAI_API_KEY
+          value: {{ .Values.ui.secrets.openaiApiKey | quote }}
+        - name: GROK_API_KEY
+          value: {{ .Values.ui.secrets.grokApiKey | quote }}
+        command:
+        - /bin/sh
+        - -c
+        - |
+          set -eu
+          echo "[hook] Installing python dependencies (cryptography, requests)"
+          python3 -m pip install --no-cache-dir --disable-pip-version-check cryptography requests
+          echo "[hook] Running key-generation and secret-sync script"
+          python3 - <<'PY'
+          import base64
+          import json
+          import os
+          from cryptography.fernet import Fernet
+          import requests
+
+          namespace = os.environ["NAMESPACE"]
+          secret_name = os.environ["SECRET_NAME"]
+          external_enabled = os.environ["EXTERNAL_SECRETS_ENABLED"].lower() == "true"
+          webui_secret_key = os.environ.get("WEBUI_SECRET_KEY", "")
+          openai_api_key = os.environ.get("OPENAI_API_KEY", "")
+          grok_api_key = os.environ.get("GROK_API_KEY", "")
+
+          host = os.environ.get("KUBERNETES_SERVICE_HOST")
+          port = os.environ.get("KUBERNETES_SERVICE_PORT_HTTPS", "443")
+          base_url = f"https://{host}:{port}/api/v1/namespaces/{namespace}/secrets/{secret_name}"
+          token_path = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+          ca_path = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+
+          print(f"[hook] Target namespace={namespace} secret={secret_name}")
+          with open(token_path, "r", encoding="utf-8") as f:
+              token = f.read().strip()
+          headers = {
+              "Authorization": f"Bearer {token}",
+              "Accept": "application/json",
+              "Content-Type": "application/json",
+          }
+
+          session = requests.Session()
+          session.verify = ca_path
+          session.headers.update(headers)
+          timeout = 20
+
+          def b64(s: str) -> str:
+              return base64.b64encode(s.encode("utf-8")).decode("utf-8")
+
+          print("[hook] Checking existing secret")
+          resp = session.get(base_url, timeout=timeout)
+          if resp.status_code == 200:
+              existing = resp.json()
+              existing_data = existing.get("data", {}) or {}
+              print("[hook] Existing secret found")
+          elif resp.status_code == 404:
+              existing = None
+              existing_data = {}
+              print("[hook] Secret not found; will create")
+          else:
+              print(f"[hook] Failed to read secret: {resp.status_code} {resp.text}")
+              resp.raise_for_status()
+
+          existing_master_b64 = existing_data.get("master-key")
+          if existing_master_b64:
+              master_key = base64.b64decode(existing_master_b64).decode("utf-8")
+              print("[hook] Preserving existing master-key")
+          elif existing is not None:
+              # Secret exists but master-key field is missing — don't silently regenerate
+              raise RuntimeError(
+                  "[hook] Refusing to regenerate master-key: secret exists but master-key field is absent. "
+                  "Investigate before proceeding — regenerating would invalidate all Fernet-encrypted data."
+              )
+          else:
+              master_key = Fernet.generate_key().decode("utf-8")
+              print("[hook] Generated new master-key (no existing secret)")
+
+          data = {"master-key": b64(master_key)}
+          if not external_enabled:
+              if not webui_secret_key or not openai_api_key:
+                  raise RuntimeError("WEBUI_SECRET_KEY and OPENAI_API_KEY are required when external secrets are disabled")
+              data["webui-secret-key"] = b64(webui_secret_key)
+              data["openai-api-key"] = b64(openai_api_key)
+              if grok_api_key:
+                  data["grok-api-key"] = b64(grok_api_key)
+              print("[hook] Writing full secret payload (external secrets disabled)")
+          else:
+              # In external secret mode, preserve provider-managed keys if present.
+              # If install-time values are provided, seed them so pods can start before ESO sync.
+              for key in ("webui-secret-key", "openai-api-key", "grok-api-key"):
+                  if key in existing_data:
+                      data[key] = existing_data[key]
+              if "webui-secret-key" not in data and webui_secret_key:
+                  data["webui-secret-key"] = b64(webui_secret_key)
+                  print("[hook] Seeded webui-secret-key from install-time value")
+              if "openai-api-key" not in data and openai_api_key:
+                  data["openai-api-key"] = b64(openai_api_key)
+                  print("[hook] Seeded openai-api-key from install-time value")
+              if "grok-api-key" not in data and grok_api_key:
+                  data["grok-api-key"] = b64(grok_api_key)
+                  print("[hook] Seeded grok-api-key from install-time value")
+              print("[hook] Writing master-key and preserving/seeding external keys")
+
+          body = {
+              "apiVersion": "v1",
+              "kind": "Secret",
+              "metadata": {"name": secret_name, "namespace": namespace},
+              "type": "Opaque",
+              "data": data,
+          }
+
+          if existing is None:
+              create_url = f"https://{host}:{port}/api/v1/namespaces/{namespace}/secrets"
+              print("[hook] Creating secret")
+              write_resp = session.post(create_url, data=json.dumps(body), timeout=timeout)
+          else:
+              print("[hook] Replacing secret")
+              write_resp = session.put(base_url, data=json.dumps(body), timeout=timeout)
+
+          if write_resp.status_code not in (200, 201):
+              print(f"[hook] Failed to write secret: {write_resp.status_code} {write_resp.text}")
+              write_resp.raise_for_status()
+
+          print("[hook] MASTER_KEY ensured successfully")
+          PY
+{{- end }}

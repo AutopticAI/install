@@ -1,0 +1,33 @@
+{{- if .Values.metrics.enabled }}
+{{- if .Values.metrics.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "autoptic-server.fullname" . }}-metrics-pvc
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    app: myapp
+    component: metrics
+    {{- include "vectors-helm.labels" . | nindent 4 }}
+  {{- with .Values.metrics.persistence.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  accessModes:
+    - {{ .Values.metrics.persistence.accessMode | default "ReadWriteOnce" }}
+  {{- if .Values.metrics.persistence.storageClass }}
+  storageClassName: {{ .Values.metrics.persistence.storageClass | quote }}
+  {{- end }}
+  {{- if .Values.metrics.persistence.volumeName }}
+  volumeName: {{ .Values.metrics.persistence.volumeName | quote }}
+  {{- end }}
+  {{- with .Values.metrics.persistence.selector }}
+  selector:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.metrics.persistence.size | default "50Gi" }}
+{{- end }}
+{{- end }}

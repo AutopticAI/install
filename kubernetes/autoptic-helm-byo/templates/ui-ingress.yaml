@@ -1,0 +1,50 @@
+{{- /*
+  NOTE: This Ingress template is the FALLBACK path for external routing.
+  It is mutually exclusive with Gateway API (ui.gateway.enabled).
+  To use Ingress instead of Gateway API:
+    1. Set ui.gateway.enabled: false
+    2. Set ui.ingress.enabled: true
+  See values.yaml for configuration details.
+*/ -}}
+{{- if and .Values.ui.enabled .Values.ui.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ui-ingress
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    {{- include "autoptic-ui.labels" . | nindent 4 }}
+  {{- with .Values.ui.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if .Values.ui.ingress.ingressClassName }}
+  ingressClassName: {{ .Values.ui.ingress.ingressClassName }}
+  {{- end }}
+  {{- if .Values.ui.ingress.tls }}
+  tls:
+    {{- range .Values.ui.ingress.tls }}
+    - hosts:
+        {{- range .hosts }}
+        - {{ . | quote }}
+        {{- end }}
+      secretName: {{ .secretName }}
+    {{- end }}
+  {{- end }}
+  rules:
+    {{- range .Values.ui.ingress.hosts }}
+    - host: {{ .host | quote }}
+      http:
+        paths:
+          {{- range .paths }}
+          - path: {{ .path }}
+            pathType: {{ .pathType }}
+            backend:
+              service:
+                name: ui-service
+                port:
+                  number: {{ $.Values.ui.service.port }}
+          {{- end }}
+    {{- end }}
+{{- end }}

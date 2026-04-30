@@ -1,0 +1,222 @@
+{{- if .Values.ui.enabled }}
+{{- $apiServiceName := default "api-service" .Values.api.service.name }}
+{{- $apiPort := default 9999 .Values.api.service.port }}
+{{- $apiNamespace := .Values.namespace.name }}
+{{- $defaultAutopticServerUrl := printf "http://%s.%s.svc.cluster.local:%v/" $apiServiceName $apiNamespace $apiPort }}
+{{- $defaultOpenAiBaseUrl := printf "http://%s.%s.svc.cluster.local:%v/v1" $apiServiceName $apiNamespace $apiPort }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: autoptic-ui
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    {{- include "autoptic-ui.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.ui.replicas }}
+  selector:
+    matchLabels:
+      {{- include "autoptic-ui.selectorLabels" . | nindent 6 }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 25%
+      maxSurge: 25%
+  template:
+    metadata:
+      labels:
+        {{- include "autoptic-ui.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.ui.securityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.ui.persistence.enabled }}
+      initContainers:
+      - name: config-init
+        image: busybox:1.36.1  # Use specific version for security
+        command: ['sh', '-c', 'cp /config-source/config.json /app/backend/data/config.json && chmod 664 /app/backend/data/config.json']
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 1000
+          capabilities:
+            drop:
+              - ALL
+        resources:
+          requests:
+            memory: "32Mi"
+            cpu: "50m"
+          limits:
+            memory: "64Mi"
+            cpu: "100m"
+        volumeMounts:
+        - name: config-source
+          mountPath: /config-source
+        - name: ui-data
+          mountPath: /app/backend/data
+      {{- end }}
+      containers:
+      - name: ui
+        image: {{ .Values.ui.image }}
+        imagePullPolicy: {{ .Values.ui.imagePullPolicy }}
+        {{- with .Values.ui.containerSecurityContext }}
+        securityContext:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        ports:
+        - containerPort: {{ .Values.ui.service.port }}
+          protocol: TCP
+        {{- with .Values.ui.livenessProbe }}
+        livenessProbe:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        {{- with .Values.ui.readinessProbe }}
+        readinessProbe:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        resources:
+          requests:
+            memory: {{ .Values.ui.resources.requests.memory }}
+            cpu: {{ .Values.ui.resources.requests.cpu }}
+          limits:
+            memory: {{ .Values.ui.resources.limits.memory }}
+            cpu: {{ .Values.ui.resources.limits.cpu }}
+        env:
+        - name: WEBUI_SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "autoptic-ui.fullname" . }}-secret
+              key: webui-secret-key
+        - name: OPENAI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "autoptic-ui.fullname" . }}-secret
+              key: openai-api-key
+        {{- if .Values.externalSecrets.grokApiKeyPath }}
+        - name: GROK_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "autoptic-ui.fullname" . }}-secret
+              key: grok-api-key
+              optional: true
+        {{- end }}
+        - name: MASTER_KEY
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "autoptic-ui.fullname" . }}-secret
+              key: master-key
+        - name: ENABLE_SIGNUP
+          value: {{ .Values.ui.env.enableSignup | quote }}
+        - name: DEFAULT_USER_ROLE
+          value: {{ .Values.ui.env.defaultUserRole | quote }}
+        - name: WEBUI_AUTH
+          value: {{ .Values.ui.env.webuiAuth | quote }}
+        - name: VECTOR_DB
+          value: {{ .Values.ui.env.vectorDb | quote }}
+        - name: QDRANT_URI
+          value: {{ .Values.ui.env.qdrantUri | quote }}
+        - name: RAG_EMBEDDING_ENGINE
+          value: {{ .Values.ui.env.ragEmbeddingEngine | quote }}
+        - name: RAG_EMBEDDING_MODEL
+          value: {{ .Values.ui.env.ragEmbeddingModel | quote }}
+        - name: RAG_EMBEDDING_MODEL_TRUST_REMOTE_CODE
+          value: {{ .Values.ui.env.ragEmbeddingModelTrustRemoteCode | quote }}
+        - name: ENABLE_RAG_WEB_SEARCH
+          value: {{ .Values.ui.env.enableRagWebSearch | quote }}
+        - name: ENABLE_RAG_LOCAL_WEB_FETCH
+          value: {{ .Values.ui.env.enableRagLocalWebFetch | quote }}
+        - name: RAG_WEB_SEARCH_ENGINE
+          value: {{ .Values.ui.env.ragWebSearchEngine | quote }}
+        - name: AUTOPTIC_SERVER_URL
+          value: {{ default $defaultAutopticServerUrl .Values.ui.env.AUTOPTIC_SERVER_URL | quote }}
+        - name: OPENAI_API_BASE_URL
+          value: {{ default $defaultOpenAiBaseUrl .Values.ui.env.openaiBaseUrl | quote }}
+        - name: AUTOPTIC_INSTANCE_ID
+          valueFrom:
+            configMapKeyRef:
+              name: autoptic-config
+              key: AUTOPTIC_INSTANCE_ID
+        - name: AUTOPTIC_TENANT_SHORT_NAME
+          valueFrom:
+            configMapKeyRef:
+              name: autoptic-config
+              key: AUTOPTIC_TENANT_SHORT_NAME
+        - name: AUTOPTIC_DEFAULT_ENVIRONMENT
+          value: {{ .Values.ui.env.defaultEnvironment | quote }}
+        - name: AUTOPTIC_DEFAULT_SECRET
+          value: {{ .Values.ui.env.defaultSecret | quote }}
+        - name: AUTH_TOKEN_EXPIRES_IN
+          value: {{ .Values.ui.env.authTokenExpiresIn | quote }}
+        - name: SESSION_COOKIE_EXPIRES_IN
+          value: {{ .Values.ui.env.sessionCookieExpiresIn | quote }}
+        {{- if .Values.ui.persistence.enabled }}
+        volumeMounts:
+        - name: ui-data
+          mountPath: {{ .Values.ui.persistence.mountPath }}
+        {{- end }}
+        {{- if .Values.ui.env.googleClientId }}
+        - name: GOOGLE_CLIENT_ID
+          value: {{ .Values.ui.env.googleClientId | quote }}
+        {{- end }}
+        {{- if or .Values.externalSecrets.googleClientSecretPath .Values.ui.secrets.googleClientSecret }}
+        - name: GOOGLE_CLIENT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "autoptic-ui.fullname" . }}-secret
+              key: google-client-secret
+              optional: true
+        {{- end }}
+        {{- if .Values.ui.env.googleRedirectUri }}
+        - name: GOOGLE_REDIRECT_URI
+          value: {{ .Values.ui.env.googleRedirectUri | quote }}
+        {{- end }}
+        {{- if .Values.ui.env.oktaClientId }}
+        - name: OKTA_CLIENT_ID
+          value: {{ .Values.ui.env.oktaClientId | quote }}
+        {{- end }}
+        {{- if or .Values.externalSecrets.oktaClientSecretPath .Values.ui.secrets.oktaClientSecret }}
+        - name: OKTA_CLIENT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "autoptic-ui.fullname" . }}-secret
+              key: okta-client-secret
+              optional: true
+        {{- end }}
+        {{- if .Values.ui.env.oktaRedirectUri }}
+        - name: OKTA_REDIRECT_URI
+          value: {{ .Values.ui.env.oktaRedirectUri | quote }}
+        {{- end }}
+        {{- if .Values.ui.env.oktaDomain }}
+        - name: OKTA_DOMAIN
+          value: {{ .Values.ui.env.oktaDomain | quote }}
+        {{- end }}
+        {{- if .Values.ui.env.duoClientId }}
+        - name: DUO_CLIENT_ID
+          value: {{ .Values.ui.env.duoClientId | quote }}
+        {{- end }}
+        {{- if or .Values.externalSecrets.duoClientSecretPath .Values.ui.secrets.duoClientSecret }}
+        - name: DUO_CLIENT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "autoptic-ui.fullname" . }}-secret
+              key: duo-client-secret
+              optional: true
+        {{- end }}
+        {{- if .Values.ui.env.duoRedirectUri }}
+        - name: DUO_REDIRECT_URI
+          value: {{ .Values.ui.env.duoRedirectUri | quote }}
+        {{- end }}
+        {{- if .Values.ui.env.duoApiHost }}
+        - name: DUO_API_HOST
+          value: {{ .Values.ui.env.duoApiHost | quote }}
+        {{- end }}
+      volumes:
+      {{- if .Values.ui.persistence.enabled }}
+      - name: config-source
+        configMap:
+          name: autoptic-config
+      - name: ui-data
+        persistentVolumeClaim:
+          claimName: {{ include "autoptic-ui.fullname" . }}-data-pvc
+      {{- end }}
+{{- end }}
