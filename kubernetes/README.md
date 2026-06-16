@@ -201,6 +201,73 @@ See [autoptic-helm-byo/README.md](./autoptic-helm-byo/README.md) for full detail
 
 Both charts share these hardened features:
 
+### DynamoDB Schema Verification
+
+A `pre-install,pre-upgrade` hook runs `setup --verify-schema` before any application pods start. It creates or updates DynamoDB tables to match the schema defined in `config.json`, ensuring new tables added between releases are present before the server comes up.
+
+The hook runs at weight `2` in the hook sequence — after master-key generation (`0`) and the PQL hostpath job (`1`), and before `setup --prepare` (`5`) in the automated chart.
+
+**To disable** (e.g. if you manage DynamoDB tables externally):
+```bash
+helm upgrade --install autoptic . \
+  --set setup.verifySchema.enabled=false \
+  ...
+```
+
+**To run manually without Helm** — three options depending on your environment:
+
+_Option A — kubectl run (in-cluster, uses IRSA):_
+```bash
+# Extract the current config from the cluster
+kubectl -n autoptic get configmap autoptic-config \
+  -o jsonpath='{.data.config\.json}' > /tmp/config.json
+
+# Run verify-schema as a one-off pod using the existing service account
+kubectl -n autoptic run schema-verify --rm -it --restart=Never \
+  --image=autoptic/server:latest \
+  --overrides='{
+    "spec": {
+      "serviceAccountName": "s3-dynamodb-access",
+      "containers": [{
+        "name": "schema-verify",
+        "image": "autoptic/server:latest",
+        "args": ["setup", "--verify-schema", "/tmp/config.json"],
+        "volumeMounts": [{"name":"cfg","mountPath":"/tmp/config.json","subPath":"config.json"}]
+      }],
+      "volumes": [{"name":"cfg","configMap":{"name":"autoptic-config"}}]
+    }
+  }'
+```
+
+_Option B — Docker (outside cluster, uses host AWS credentials):_
+```bash
+# Uses the same flow as: docker compose run --no-deps server setup --verify-schema /server/config.json
+docker run --rm \
+  -v "$PWD/config.json:/server/config.json:ro" \
+  -e AWS_REGION=us-west-2 \
+  -e AWS_PROFILE=your-profile \
+  -v "$HOME/.aws:/root/.aws:ro" \
+  autoptic/server:latest \
+  setup --verify-schema /server/config.json
+```
+
+_Option C — pure Helm (targeted upgrade, schema hook only):_
+```bash
+# Runs only the verify-schema pre-upgrade hook; all other hooks and pods are left untouched.
+helm upgrade autoptic . -n autoptic --reuse-values \
+  --set setup.verifySchema.enabled=true \
+  --set setup.prepare.enabled=false \
+  --set setup.run.enabled=false \
+  --set setup.load.enabled=false \
+  --set hooks.masterKey.generate=false
+```
+
+_Option D — trigger via Helm upgrade (re-runs all hooks):_
+```bash
+# Re-runs every pre-upgrade hook including verify-schema, prepare, run, and load.
+helm upgrade autoptic . -n autoptic --reuse-values
+```
+
 ### Marker-Aware Setup Load
 A post-install/post-upgrade hook runs `setup --load` to load sample content (environments, PQL queries, briefs). The hook uses a marker ConfigMap (`autoptic-setup-state`) to track completion per instance-id, preventing duplicate loads on reinstalls/upgrades.
 

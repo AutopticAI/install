@@ -99,10 +99,26 @@ spec:
               print(f"[hook] Failed to read secret: {resp.status_code} {resp.text}")
               resp.raise_for_status()
 
+          FERNET_KEY_RE = re.compile(r'^[A-Za-z0-9_-]{43}=$')
+
+          def is_valid_fernet_key(key: str) -> bool:
+              if not FERNET_KEY_RE.match(key):
+                  return False
+              try:
+                  Fernet(key.encode())
+                  return True
+              except Exception:
+                  return False
+
           existing_master_b64 = existing_data.get("master-key")
           if existing_master_b64:
-              master_key = base64.b64decode(existing_master_b64).decode("utf-8")
-              print("[hook] Preserving existing master-key")
+              decoded = base64.b64decode(existing_master_b64).decode("utf-8").strip()
+              if is_valid_fernet_key(decoded):
+                  master_key = decoded
+                  print("[hook] Preserving existing valid master-key")
+              else:
+                  print(f"[hook] Existing master-key is invalid (not a Fernet key), regenerating")
+                  master_key = Fernet.generate_key().decode("utf-8")
           elif existing is not None:
               # Secret exists but master-key field is missing — don't silently regenerate
               raise RuntimeError(
