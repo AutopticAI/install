@@ -1,4 +1,10 @@
-{{- if and .Values.config.enabled (not .Values.config.useExisting) (not (and .Values.setup .Values.setup.prepare .Values.setup.prepare.enabled)) }}
+{{- if and .Values.config.enabled (not .Values.config.useExisting) (not .Values.setup.enabled) }}
+{{- if not .Values.api.env.instanceId }}
+{{- fail "api.env.instanceId is required when setup.enabled=false. Retrieve it with: kubectl get secret autoptic-instance-id -n autoptic -o jsonpath='{.data.instance-id}' | base64 -d" }}
+{{- end }}
+{{- if not .Values.api.env.tenantShortName }}
+{{- fail "api.env.tenantShortName is required when setup.enabled=false. Retrieve it with: kubectl get secret autoptic-instance-id -n autoptic -o jsonpath='{.data.tenant-short-name}' | base64 -d" }}
+{{- end }}
 apiVersion: v1
 kind: ConfigMap
 metadata:

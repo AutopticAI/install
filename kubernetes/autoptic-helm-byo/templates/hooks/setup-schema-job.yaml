@@ -1,4 +1,4 @@
-{{- if and .Values.setup.enabled .Values.setup.verifySchema.enabled }}
+{{- if and .Values.setup.enabled .Values.setup.verifySchema.enabled (not .Values.setup.prepare.enabled) }}
 apiVersion: batch/v1
 kind: Job
 metadata:
