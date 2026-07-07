@@ -1,0 +1,53 @@
+{{- if .Values.setup.enabled }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "autoptic-server.fullname" . }}-setup-restore-sa
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    {{- include "autoptic-server.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-1"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded,hook-failed
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "autoptic-server.fullname" . }}-setup-restore-role
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    {{- include "autoptic-server.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-1"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded,hook-failed
+rules:
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "create", "update", "patch"]
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "autoptic-server.fullname" . }}-setup-restore-binding
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    {{- include "autoptic-server.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-1"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded,hook-failed
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "autoptic-server.fullname" . }}-setup-restore-role
+subjects:
+- kind: ServiceAccount
+  name: {{ include "autoptic-server.fullname" . }}-setup-restore-sa
+  namespace: {{ .Values.namespace.name }}
+{{- end }}
