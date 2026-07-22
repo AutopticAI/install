@@ -1,0 +1,31 @@
+# copilot/vectors/manifest.yml
+#
+# Embedding model service. Sized for an ~1.3GB e5-large-v2 safetensors model — adjust
+# cpu/memory upward if your model is bigger. Undersizing causes:
+#   RuntimeError: unable to mmap <N> bytes from file <model>.safetensors: Cannot allocate memory
+# even though mmap is normally lazy — Fargate's memory accounting still requires real
+# headroom above the file size.
+
+name: vectors
+type: Backend Service
+
+# Not reachable from outside the environment — only other services (server) call it,
+# via vectors.<ENV_NAME>.<APP_NAME>.local:8000
+
+image:
+  location: <YOUR_ORG>/vectors:latest
+  # GOTCHA: `port` is REQUIRED here even though this is a Backend Service with no ALB.
+  # Without it, Copilot never registers this service under Service Connect/Cloud Map at
+  # all — no DNS record gets created, and callers (server) fail with a DNS/connection
+  # error, not a clean "connection refused."
+  port: 8000
+
+cpu: 1024      # bump further if your embedding model is larger than ~1.5GB
+memory: 4096
+count: 1
+exec: true
+
+network:
+  connect: true
+  vpc:
+    placement: public   # only needed if your environment has no NAT Gateway

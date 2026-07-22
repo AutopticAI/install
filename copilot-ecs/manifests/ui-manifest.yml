@@ -1,0 +1,46 @@
+# copilot/ui/manifest.yml
+#
+# Only service that's internet-facing (Load Balanced Web Service). Needs a persistent
+# EFS volume for its SQLite DB + generated secret key, or every redeploy wipes chat
+# history, users, and settings.
+
+name: ui
+type: Load Balanced Web Service
+
+http:
+  path: '/'
+  # healthcheck: '/'   # default health check path is "/" already, override only if needed
+  # alias: ui.<YOUR_DOMAIN>   # uncomment once you have a validated cert — see DNS-TLS-SETUP.md
+
+image:
+  location: <YOUR_ORG>/ui:latest
+  port: 8080
+
+cpu: 256
+memory: 512
+count: 1
+exec: true
+
+network:
+  connect: true
+  vpc:
+    placement: public   # only needed if your environment has no NAT Gateway
+
+storage:
+  volumes:
+    uidata:
+      path: /app/backend/data
+      # GOTCHA: Copilot manifest EFS volumes default to read_only: true. This service
+      # writes its SQLite DB and secret key file here — must override, or you'll see
+      # "Read-only file system" errors at startup.
+      read_only: false
+      efs:
+        uid: 10000        # must be unique across all EFS volumes in this environment
+        gid: 10000
+
+# `ui` needs to know where `server` lives. Do NOT rely on the "Server URL" field in the
+# admin settings page — that field is validated client-side by the BROWSER, which cannot
+# resolve private Cloud Map DNS names (server is not internet-facing). Set this env var
+# instead, same as the AUTOPTIC_SERVER_URL convention used in the Kubernetes deployment:
+variables:
+  AUTOPTIC_SERVER_URL: http://server.<ENV_NAME>.<APP_NAME>.local:9999/

@@ -1,0 +1,63 @@
+{
+  "server": {
+    "port": "9999",
+    "host": "0.0.0.0",
+    "ui": "http://localhost:8080",
+    "log_level": "info"
+  },
+
+  "aws": {
+    "profile": "",
+    "region": "<AWS_REGION>"
+  },
+
+  "pql": {
+    "command": "/server/pql"
+  },
+
+  "instance": {
+    "id": "<TENANT_SHORT_NAME>-<RANDOM_HEX>",
+    "tenant_short_name": "<TENANT_SHORT_NAME>",
+    "default_endpoint": "default"
+  },
+
+  "scheduler": {
+    "refresh_interval": "300s",
+    "api_endpoint": "http://localhost:9999/story/ep/default",
+    "api_token": "",
+    "timeout": "180s"
+  },
+
+  "tasks": {
+    "generate": "default",
+    "analyze": "default"
+  },
+
+  "secrets": {
+    "default": "default"
+  },
+
+  "vector": {
+    "size": 1024,
+    "model": "e5-large-v2",
+    "embed_url": "http://vectors.<ENV_NAME>.<APP_NAME>.local:8000",
+    "qdrant_host": "metrics.<ENV_NAME>.<APP_NAME>.local",
+    "qdrant_port": 6334,
+    "vector_search_timeout_sec": 30
+  },
+
+  "retry": {
+    "max_retries": 3,
+    "initial_backoff_ms": 100,
+    "max_backoff_ms": 5000
+  },
+
+  "llm": {
+    "max_chunks": 20,
+    "chunk_overlap_tokens": 100,
+    "token_estimation_ratio": 3,
+    "rate_limit_delay_ms": 1000,
+    "max_concurrent_requests": 3,
+    "requests_per_minute": 60
+  }
+}

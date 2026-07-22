@@ -1,0 +1,22 @@
+# environments/<ENV_NAME>/manifest.yml
+#
+# Default env init produces this without the `http` block. Add the `http.public.certificates`
+# block below only once you've requested + validated an ACM certificate (see DNS-TLS-SETUP.md).
+# Without it, the ALB only listens on HTTP.
+
+name: <ENV_NAME>
+type: Environment
+
+# Import your own VPC and subnets, or leave commented to let Copilot create one.
+# network:
+#   vpc:
+#     id:
+
+# Uncomment once you have a validated ACM certificate ARN (see DNS-TLS-SETUP.md).
+# http:
+#   public:
+#     certificates:
+#       - <ACM_CERTIFICATE_ARN>
+
+observability:
+  container_insights: false

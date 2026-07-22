@@ -1,0 +1,78 @@
+# copilot/server/manifest.yml
+#
+# server + scheduler run in ONE ECS task (scheduler as a sidecar), replicating
+# docker-compose's `network_mode: service:server` — containers in the same ECS task
+# already share a network namespace, so no special config is needed for that part.
+#
+# config.json is delivered by the `init` sidecar, which pulls it from S3 onto a shared
+# EFS volume before `server`/`scheduler` are allowed to start (`depends_on: init: success`).
+
+name: server
+type: Backend Service
+
+# Reachable inside the environment at:
+#   http://server.<ENV_NAME>.<APP_NAME>.local:9999
+#   e.g. http://server.prod.autoptic.local:9999
+# This is a PRIVATE hosted zone — only resolvable from another service in the same
+# Copilot environment, never from a laptop/browser outside the VPC. Not public.
+# Get the real value with: aws servicediscovery list-namespaces
+
+image:
+  location: <YOUR_ORG>/server:latest
+  port: 9999
+
+cpu: 512       # shared across server, scheduler, and init sidecars — size up if needed
+memory: 1024
+count: 1
+exec: true     # required for `copilot svc exec` / `aws ecs execute-command` debugging
+
+network:
+  connect: true   # Service Connect, for other services to reach this one by name
+  vpc:
+    placement: public   # only needed if your environment has no NAT Gateway
+
+command: ["api", "-config", "/mnt/shared/config.json"]
+depends_on:
+  init: success
+
+healthcheck:
+  # Replace with a real, cheap endpoint that proves the app is actually serving traffic —
+  # not just that the process is running.
+  command: ["CMD-SHELL", "curl -sf http://localhost:9999/<YOUR_HEALTH_ENDPOINT> || exit 1"]
+  interval: 10s
+  timeout: 5s
+  retries: 3
+  start_period: 15s
+
+storage:
+  volumes:
+    sharedfiles:
+      path: /mnt/shared
+      read_only: true    # server only reads config.json — write access is init-only, below
+      efs:
+        uid: 10002        # must be unique across all EFS volumes in this environment
+        gid: 10002
+
+sidecars:
+  init:
+    image: public.ecr.aws/aws-cli/aws-cli:latest
+    essential: false
+    # GOTCHA: this image's own ENTRYPOINT is already `/usr/local/bin/aws`. If you only set
+    # `command` without overriding `entrypoint`, ECS runs `aws sh -c "..."` (entrypoint +
+    # command concatenated) — invalid syntax, exits with code 252. Always override both.
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["aws s3 cp s3://<DEPLOY_ARTIFACTS_BUCKET>/config.json /mnt/shared/config.json"]
+    mount_points:
+      - source_volume: sharedfiles
+        path: /mnt/shared
+        read_only: false   # init needs write access to actually place the file
+
+  scheduler:
+    image: <YOUR_ORG>/server:latest
+    command: ["scheduler", "-config", "/mnt/shared/config.json"]
+    depends_on:
+      init: success
+    mount_points:
+      - source_volume: sharedfiles
+        path: /mnt/shared
+        read_only: true

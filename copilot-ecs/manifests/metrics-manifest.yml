@@ -1,0 +1,43 @@
+# copilot/metrics/manifest.yml
+#
+# Qdrant vector DB. Its entrypoint (seed-and-run.sh) only reseeds the bundled demo dataset
+# into /qdrant/storage/collections if that directory is empty on startup — meaning it
+# expects /qdrant/storage to persist across restarts. If your usage actually writes new
+# vectors over time (not just the seed dataset), you need this EFS volume; confirm against
+# your own image's seed script if unsure.
+
+name: metrics
+type: Backend Service
+
+# Not reachable from outside the environment — only other services (server) call it,
+# via metrics.<ENV_NAME>.<APP_NAME>.local:6334
+
+image:
+  location: <YOUR_ORG>/metrics:latest
+  # GOTCHA: `port` is REQUIRED here even though this is a Backend Service with no ALB.
+  # Without it, Copilot never registers this service under Service Connect/Cloud Map at
+  # all — no DNS record gets created, and callers (server) fail with a gRPC/DNS error
+  # like "name resolver error: produced zero addresses", not a connection-refused error.
+  port: 6334
+
+cpu: 256
+memory: 512
+count: 1
+exec: true
+
+network:
+  connect: true
+  vpc:
+    placement: public   # only needed if your environment has no NAT Gateway
+
+storage:
+  volumes:
+    vectordata:
+      path: /qdrant/storage
+      # GOTCHA: Copilot manifest EFS volumes default to read_only: true. The seed script
+      # does `mkdir -p /qdrant/storage/collections` on every startup — must override, or
+      # you'll see "Read-only file system" errors and the task will crash-loop.
+      read_only: false
+      efs:
+        uid: 10001        # must be unique across all EFS volumes in this environment
+        gid: 10001

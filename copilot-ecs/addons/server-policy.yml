@@ -1,0 +1,55 @@
+# copilot/server/addons/policy.yml
+#
+# Any AWS::IAM::ManagedPolicy output from a copilot/<service>/addons/*.yml file is
+# automatically attached to that service's task role on the next `copilot svc deploy` —
+# no manual attach step needed. Since `scheduler` runs as a sidecar in the same task as
+# `server`, this one policy covers both.
+#
+# The app self-provisions its own DynamoDB tables and S3 bucket on first run, so this
+# needs Create* permissions, not just read/write.
+
+Parameters:
+  App:
+    Type: String
+  Env:
+    Type: String
+  Name:
+    Type: String
+
+Resources:
+  AutopticAccessPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - dynamodb:CreateTable
+              - dynamodb:DescribeTable
+              - dynamodb:PutItem
+              - dynamodb:GetItem
+              - dynamodb:Query
+              - dynamodb:DeleteItem
+              - dynamodb:ListTables
+            Resource:
+              - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/<TENANT_SHORT_NAME>-*'
+          - Effect: Allow
+            Action:
+              - s3:CreateBucket
+              - s3:PutObject
+              - s3:GetObject
+              - s3:ListBucket
+              - s3:DeleteObject
+            Resource:
+              - !Sub 'arn:aws:s3:::<TENANT_SHORT_NAME>-snaps-*'
+              - !Sub 'arn:aws:s3:::<TENANT_SHORT_NAME>-snaps-*/*'
+          - Effect: Allow
+            Action:
+              - s3:GetObject
+            Resource:
+              - arn:aws:s3:::<DEPLOY_ARTIFACTS_BUCKET>/config.json
+
+Outputs:
+  AutopticAccessPolicyArn:
+    Value: !Ref AutopticAccessPolicy
