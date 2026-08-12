@@ -65,6 +65,23 @@ Scheduler labels
 {{- end }}
 
 {{/*
+MCP selector labels
+*/}}
+{{- define "autoptic-server.mcp.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "autoptic-server.name" . }}-mcp
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/component: mcp
+{{- end }}
+
+{{/*
+MCP labels
+*/}}
+{{- define "autoptic-server.mcp.labels" -}}
+{{ include "autoptic-server.labels" . }}
+{{ include "autoptic-server.mcp.selectorLabels" . }}
+{{- end }}
+
+{{/*
 Create the name of the service account to use
 */}}
 {{- define "autoptic-server.serviceAccountName" -}}

@@ -15,6 +15,7 @@ For the automated flow where AWS resources are provisioned in-cluster, see the s
 - [IRSA Setup](#irsa-setup)
 - [Marker-Aware Setup Load](#marker-aware-setup-load)
 - [Migration from Automated Chart](#migration-from-automated-chart)
+- [MCP Server](#mcp-server)
 - [Troubleshooting](#troubleshooting)
 - [Values Reference](#values-reference)
 
@@ -454,6 +455,80 @@ helm upgrade --install autoptic-byo ./autoptic-helm-byo \
   --set config.useExisting=true \
   --set serviceAccounts.s3DynamoDbAccess.roleArn=arn:aws:iam::<account-id>:role/<role-name>
 ```
+
+---
+
+## MCP Server
+
+This chart also deploys the `mcp` component: [Autoptic's MCP (Model Context Protocol) server](https://github.com/AutopticAI/mcp),
+which exposes Autoptic's agent/catalog/brief-record API as MCP tools — for external MCP clients (Claude Code,
+Claude Desktop, etc. connecting directly) and for Autoptic's own agents to call back into themselves as an
+MCP-backed data source (`"type": "mcp"` steps in agent skills).
+
+**What it does:** wraps `AUTOPTIC_API_BASE_URL` (the in-cluster `api-service`, in this BYO chart's `autoptic-byo`
+namespace) and exposes it as MCP tools: `autoptic_catalog_list`/`_search`/`_add` (browse and register catalog
+entries), `autoptic_search_brief_records`/`_get_brief_record` (find and read past agent findings),
+`autoptic_run_agent_skill` (execute a skill), and the persisted-config CRUD tools (`autoptic_config_list`/`_get`/
+`_delete`, `autoptic_agents_save`, `autoptic_env_save`, `autoptic_pql_save`, `autoptic_skills_save`).
+
+**How it's secured:** the server only speaks `streamable_http` and gates the `/mcp` endpoint behind a shared
+secret sent as the `X-MCP-Token` header — separate from any `Authorization: Bearer` token forwarded upstream to
+the Autoptic API itself. The pod refuses to start without `MCP_SERVER_TOKEN` set (`config error:
+MCP_SERVER_TOKEN is required for streamable_http transport`), so the Secret below is not optional.
+
+**Configuring the secret:**
+
+```yaml
+mcp:
+  enabled: true
+  secrets:
+    mcpServerToken: "<a real random token — required>"
+    autopticApiToken: "" # optional; only needed if the Autoptic API itself requires bearer auth
+```
+
+Generate a real token rather than typing one by hand:
+
+```bash
+openssl rand -hex 32
+```
+
+If `externalSecrets.enabled: true`, this chart does **not** create the `mcp-server-token`/`autoptic-api-token`
+Secret itself — sync both keys into `mcp.secretName` (default `autoptic-mcp-secrets`) via your own
+`ExternalSecret`/`SecretStore`.
+
+**Connecting to it:**
+
+- **From within the cluster** (an agent's `where[]` MCP entry):
+  `http://mcp-service.autoptic-byo.svc.cluster.local:7000/mcp`, with
+  `headers: { "X-MCP-Token": "{{ secret 'autoptic.mcp.server.token' }}" }` in the environment config (store the
+  same token value in Autoptic's own secret store under that key so it matches).
+- **From outside the cluster**: enable `mcp.gateway` (same Gateway API `HTTPRoute` pattern the `ui`/automated
+  chart uses, just under `mcp.` instead of `ui.`) and connect to `https://<your-mcp-hostname>/mcp` with the
+  same `X-MCP-Token` header.
+- **Health check**: `GET /health` on port 7000 is unauthenticated and used for the liveness/readiness probes.
+
+**Running mcp locally instead (stdio transport)**, e.g. for a developer's own Claude Desktop/Code
+`mcpServers` config, talking to the deployed Autoptic API over the internet rather than to the in-cluster
+pod at all — no `X-MCP-Token`/Gateway involved, since `stdio` skips the HTTP auth gate entirely and instead
+requires `AUTOPTIC_API_TOKEN` directly:
+
+```json
+{
+  "mcpServers": {
+    "autoptic": {
+      "command": "/path/to/autoptic-mcp",
+      "args": ["--transport", "stdio"],
+      "env": {
+        "AUTOPTIC_API_BASE_URL": "https://<your-api-hostname>/",
+        "AUTOPTIC_API_TOKEN": "<your-autoptic-api-token>"
+      }
+    }
+  }
+}
+```
+
+Note: this assumes the Autoptic **API** itself (not mcp) already has its own external route configured
+separately (outside this chart) — point `AUTOPTIC_API_BASE_URL` at wherever that is.
 
 ---
 

@@ -121,6 +121,85 @@ scheduler:
   affinity: {}
 
 # ============================================
+# MCP Server Configuration
+# ============================================
+mcp:
+  enabled: true
+  image: autoptic/mcp:latest
+  imagePullPolicy: Always
+  replicas: 1
+  secretName: autoptic-mcp-secrets
+
+  # Required: a real random token clients must send as the X-MCP-Token header.
+  # Optional: an Autoptic API bearer token forwarded upstream per-request.
+  # Ignored (and this Secret is not created) when externalSecrets.enabled=true —
+  # sync the same two keys via your ExternalSecret in that case.
+  secrets:
+    mcpServerToken: ""
+    autopticApiToken: ""
+
+
+  resources:
+    requests:
+      memory: "64Mi"
+      cpu: "50m"
+    limits:
+      memory: "128Mi"
+      cpu: "100m"
+
+  env:
+    apiBaseUrl: http://api-service.autoptic.svc.cluster.local:9999/
+    adminToolsEnabled: "false"
+    # Must match the key suffix in the external mcp.autoptic.service.<serverId> token registry.
+    serverId: ""
+
+  service:
+    name: mcp-service
+    type: ClusterIP
+    port: 7000
+    targetPort: 7000
+    annotations: {}
+
+  livenessProbe:
+    httpGet:
+      path: /health
+      port: 7000
+    initialDelaySeconds: 30
+    periodSeconds: 10
+  readinessProbe:
+    httpGet:
+      path: /health
+      port: 7000
+    initialDelaySeconds: 5
+    periodSeconds: 5
+
+  podAnnotations: {}
+  podLabels: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+  # Gateway API configuration (HTTPRoute only - assumes existing Gateway).
+  # Mutually exclusive with ingress.enabled; mcp has no Ingress template since
+  # this org has moved off Ingress in favor of Gateway API.
+  ingress:
+    enabled: false
+
+  gateway:
+    enabled: true
+    parentRefs:
+      - name: "replace-me-gateway"
+        namespace: "replace-me-gateway-namespace"
+    hostnames:
+      - "mcp.example.com"
+    rules:
+      - matches:
+          - path:
+              type: PathPrefix
+              value: /
+    annotations: {}
+
+# ============================================
 # ConfigMap Configuration
 # ============================================
 config:
@@ -298,6 +377,7 @@ metrics:
   securityContext:
     fsGroup: 1000
     runAsUser: 1000
+    runAsGroup: 1000
 
   containerSecurityContext:
     runAsNonRoot: true

@@ -407,6 +407,11 @@ kubectl -n autoptic exec deploy/autoptic-api -- /server/api-server setup --load 
   - Connects to Qdrant via auto-computed QDRANT_URL/HOST/PORT
 - Storage (pql-aws-pv, pql-aws-storage)
   - PV hostPath created automatically with pre-install hook (DirectoryOrCreate)
+- MCP (mcp-deployment, mcp-service, optional mcp-gateway HTTPRoute)
+  - Exposes the Model Context Protocol server on port 7000 (`/mcp` for the protocol endpoint, `/health` for probes)
+  - Talks to API at api-service:9999 (in-cluster, same namespace)
+  - Every request to `/mcp` must carry the `X-MCP-Token` header matching the `mcp-server-token` Secret key — requests without it get a 401, and the pod refuses to start at all if `MCP_SERVER_TOKEN` isn't set
+  - See "MCP Server" below for what it does and how to configure the required secret
 
 ### Gateway API vs Ingress
 
@@ -439,6 +444,78 @@ ui:
               type: PathPrefix
               value: /
 ```
+
+
+### MCP Server
+
+The `mcp` component runs [Autoptic's MCP (Model Context Protocol) server](https://github.com/AutopticAI/mcp),
+which exposes Autoptic's agent/catalog/brief-record API as MCP tools — for both external MCP clients
+(Claude Code, Claude Desktop, etc. connecting directly) and for Autoptic's own agents to call back into
+themselves as an MCP-backed data source (`"type": "mcp"` steps in agent skills).
+
+**What it does:** wraps `AUTOPTIC_API_BASE_URL` (the in-cluster `api-service`) and exposes it as MCP tools:
+`autoptic_catalog_list`/`_search`/`_add` (browse and register catalog entries), `autoptic_search_brief_records`/
+`_get_brief_record` (find and read past agent findings), `autoptic_run_agent_skill` (execute a skill), and the
+persisted-config CRUD tools (`autoptic_config_list`/`_get`/`_delete`, `autoptic_agents_save`, `autoptic_env_save`,
+`autoptic_pql_save`, `autoptic_skills_save`).
+
+**How it's secured:** the server only speaks `streamable_http` and gates the `/mcp` endpoint behind a shared
+secret sent as the `X-MCP-Token` header — this is separate from any `Authorization: Bearer` token forwarded
+upstream to the Autoptic API itself. The pod will not start without `MCP_SERVER_TOKEN` set (`config error:
+MCP_SERVER_TOKEN is required for streamable_http transport`), so the Secret described below is not optional.
+
+**Configuring the secret:**
+
+```yaml
+mcp:
+  enabled: true
+  secrets:
+    mcpServerToken: "<a real random token — required>"
+    autopticApiToken: "" # optional; only needed if the Autoptic API itself requires bearer auth
+```
+
+Generate a real token rather than typing one by hand, e.g.:
+
+```bash
+openssl rand -hex 32
+```
+
+If `externalSecrets.enabled: true`, this chart does **not** create the `mcp-server-token`/`autoptic-api-token`
+Secret itself — sync both keys into `mcp.secretName` (default `autoptic-mcp-secrets`) via your own
+`ExternalSecret`/`SecretStore`, the same way `awsSecret`/`ui.secrets` are handled when External Secrets is on.
+
+**Connecting to it:**
+
+- **From within the cluster** (an agent's `where[]` MCP entry): `http://mcp-service.<namespace>.svc.cluster.local:7000/mcp` (substitute your `.Values.namespace.name`, e.g. `autoptic`),
+  with `headers: { "X-MCP-Token": "{{ secret 'autoptic.mcp.server.token' }}" }` in the environment config
+  (store the same token value in Autoptic's own secret store under that key so it matches).
+- **From outside the cluster** (an external MCP client): enable `mcp.gateway` (see "Gateway API vs Ingress"
+  below — same pattern, just under `mcp.` instead of `ui.`) and connect to `https://<your-mcp-hostname>/mcp`
+  with the same `X-MCP-Token` header.
+- **Health check**: `GET /health` on port 7000 is unauthenticated and used for the liveness/readiness probes.
+
+**Running mcp locally instead (stdio transport)**, e.g. for a developer's own Claude Desktop/Code
+`mcpServers` config, talking to the deployed Autoptic API over the internet rather than to the in-cluster
+pod at all — no `X-MCP-Token`/Gateway involved, since `stdio` skips the HTTP auth gate entirely and instead
+requires `AUTOPTIC_API_TOKEN` directly:
+
+```json
+{
+  "mcpServers": {
+    "autoptic": {
+      "command": "/path/to/autoptic-mcp",
+      "args": ["--transport", "stdio"],
+      "env": {
+        "AUTOPTIC_API_BASE_URL": "https://<your-api-hostname>/",
+        "AUTOPTIC_API_TOKEN": "<your-autoptic-api-token>"
+      }
+    }
+  }
+}
+```
+
+Note: this assumes the Autoptic **API** itself (not mcp) already has its own external route configured
+separately (outside this chart) — point `AUTOPTIC_API_BASE_URL` at wherever that is.
 
 ### Minikube notes
 

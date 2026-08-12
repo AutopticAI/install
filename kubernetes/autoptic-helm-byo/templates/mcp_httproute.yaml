@@ -1,0 +1,33 @@
+{{- if and .Values.mcp.enabled .Values.mcp.gateway.enabled }}
+{{- if .Values.mcp.ingress.enabled -}}
+{{- fail "ERROR: Both mcp.ingress.enabled and mcp.gateway.enabled are true. These are mutually exclusive. Set mcp.ingress.enabled: false to use Gateway API, or mcp.gateway.enabled: false to use Ingress." -}}
+{{- end -}}
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: mcp-route
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    {{- include "autoptic-server.mcp.labels" . | nindent 4 }}
+  {{- with .Values.mcp.gateway.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  parentRefs:
+    {{- toYaml .Values.mcp.gateway.parentRefs | nindent 4 }}
+  {{- with .Values.mcp.gateway.hostnames }}
+  hostnames:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    {{- range .Values.mcp.gateway.rules }}
+    - matches:
+        {{- toYaml .matches | nindent 8 }}
+      backendRefs:
+        - group: ""
+          kind: Service
+          name: {{ default (printf "%s-mcp" (include "autoptic-server.fullname" $)) $.Values.mcp.service.name }}
+          port: {{ $.Values.mcp.service.port }}
+    {{- end }}
+{{- end }}

@@ -1,0 +1,22 @@
+{{- if .Values.mcp.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ default (printf "%s-mcp" (include "autoptic-server.fullname" .)) .Values.mcp.service.name }}
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    {{- include "autoptic-server.mcp.labels" . | nindent 4 }}
+  {{- with .Values.mcp.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.mcp.service.type }}
+  ports:
+  - port: {{ .Values.mcp.service.port }}
+    targetPort: {{ .Values.mcp.service.targetPort }}
+    protocol: TCP
+    name: http
+  selector:
+    {{- include "autoptic-server.mcp.selectorLabels" . | nindent 4 }}
+{{- end }}
