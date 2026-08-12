@@ -127,6 +127,16 @@ module "ecs" {
         }
       }
 
+      # Client-only Service Connect membership -- no `service` entry, since nothing calls
+      # server via Service Connect (it's reached through the internal-server ALB instead).
+      # This join is what lets server resolve the bare "metrics" hostname for its own direct
+      # Qdrant gRPC client (config.json's vector.qdrant_host, set to "metrics" below). Without
+      # this block, server has no path to metrics at all.
+      service_connect_configuration = {
+        enabled   = true
+        namespace = aws_service_discovery_private_dns_namespace.this.arn
+      }
+
       # Direct port of addons/server-policy.yml -- Create* permissions are intentional, the
       # app self-provisions its own DynamoDB tables and S3 snapshot bucket on first run.
       tasks_iam_role_statements = [

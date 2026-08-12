@@ -10,10 +10,6 @@ Built from four published modules — `terraform-aws-modules/vpc`, `.../ecs`, `.
 `.../security-group` — plus plain `aws_lb`/`aws_efs_*`/`aws_secretsmanager_*`/`aws_service_discovery_*`
 resources for the pieces those modules don't cover.
 
-**This install has been run end to end against a real AWS account** — every step below,
-including the errors called out inline and in `TROUBLESHOOTING.md`, reflects what actually
-happened, not a paper design.
-
 ## Prerequisites
 
 - Terraform >= 1.10.
@@ -21,8 +17,7 @@ happened, not a paper design.
   Secrets Manager secrets, and (for state locking) S3 buckets.
 - Docker installed locally (only used to generate `config.json` — nothing else runs locally).
 - The [Session Manager plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html)
-  installed, if you want to debug into running containers later via `aws ecs execute-command`
-  (see `TROUBLESHOOTING.md` — this is how the Service Connect DNS issue below got root-caused).
+  installed, if you want to debug into running containers later via `aws ecs execute-command`.
 
 ## Step 0: Bootstrap a Terraform state backend
 
@@ -69,10 +64,9 @@ terraform apply -target=module.vpc -target=module.ecs \
 
 `config.json` needs the internal ALBs' DNS names, which don't exist until this first apply
 finishes — this mirrors Copilot's own two-phase flow (`env deploy` first, then read the real
-Cloud Map namespace name before finishing `config.json`), not a Terraform-specific wrinkle. The
-`-target` list above is exactly what was used for the real run this guide is based on; expect at
-least one retry — see "`-target` retries and the orphaned-secret loop" in `TROUBLESHOOTING.md`
-before you hit it blind.
+Cloud Map namespace name before finishing `config.json`), not a Terraform-specific wrinkle. If
+this step fails partway through, retry the apply directly — see `TROUBLESHOOTING.md` before
+retrying with `terraform destroy` or `-replace`.
 
 ## Step 3: Edit `config.json` for this environment
 
@@ -83,21 +77,16 @@ before you hit it blind.
 | `vector.embed_url` | `http://localhost:8000` | `http://<internal-vectors ALB DNS>:8000` — from `terraform output internal_vectors_alb_dns_name` |
 | `pql.command` | e.g. `/root/pql` | `/server/pql` — wherever the Dockerfile bakes the `pql` binary |
 
-`vector.qdrant_host`/`qdrant_port` are left as Copilot's original example values. `server` has no
-Service Connect configuration in this design at all (confirmed: `vectors` is the only caller of
-`metrics`), so there is no live path for `server` to reach `metrics` directly under any hostname
-— if these fields turn out to matter for some `server` code path not exercised in this install,
-treat that as a design question to raise, not a value to guess at here.
+Set `vector.qdrant_host` to the bare name `metrics` (`qdrant_port` stays `6334`). `server` has a
+client-only Service Connect membership (`ecs.tf`'s `server.service_connect_configuration`) purely
+so it can resolve this bare name for its own direct Qdrant gRPC client — this is a separate
+connection from `vectors`' own internal Qdrant client, and from `vectors → metrics` (§ below).
 
-> **If you do need a service in this mesh to reach `metrics` or `vectors`, do not use
-> `metrics.<env>.<app>.local` / `vectors.<env>.<app>.local`, even though that's the pattern
-> Copilot's own docs use.** ECS Service Connect does not publish a real DNS record at all — it
-> statically injects the bare alias name into `/etc/hosts`, mapped to a reserved `127.255.x.x`
-> loopback address that the Envoy sidecar intercepts via `iptables`. The FQDN form resolves to
-> nothing; only the bare name (e.g. `metrics`, `vectors`) works, and only from a task that is
-> itself in the same Service Connect mesh (`service_connect_configuration.enabled = true` on
-> that service). Confirmed live, by exec'ing into a running task — see "Service Connect names are
-> bare, never FQDNs" in `TROUBLESHOOTING.md`.
+> **If you do need a service in this mesh to reach `metrics` or `vectors`, use the bare name
+> (`metrics`, `vectors`), not `metrics.<env>.<app>.local` / `vectors.<env>.<app>.local`.** ECS
+> Service Connect resolves only the bare alias name, and only from a task that is itself in the
+> same Service Connect mesh (`service_connect_configuration.enabled = true` on that service). See
+> `TROUBLESHOOTING.md` if a service still can't reach another after setting the bare name.
 
 `ui`'s `AUTOPTIC_SERVER_URL` and `mcp`'s `AUTOPTIC_API_BASE_URL` are set automatically by
 `ecs.tf` from `aws_lb.internal_server.dns_name` — nothing to edit by hand for those two, since
@@ -115,9 +104,7 @@ rules, the S3 upload, the Secrets Manager secrets, EFS mount targets) and upload
 order is handled by Terraform's dependency graph, not manual sequencing.
 
 Run `terraform plan` immediately after — it should report **no changes**. If it doesn't, resolve
-that drift before moving on; see `TROUBLESHOOTING.md` for the specific drift this setup hit
-(security group ports normalizing from `0` to `-1`) and how it was fixed at the source rather
-than re-appearing on every plan.
+that drift before moving on; see `TROUBLESHOOTING.md` for common causes.
 
 ## Verifying
 
@@ -146,8 +133,7 @@ done
 
 All five should be `rolloutState: COMPLETED` with `healthy` targets. If any aren't, start with
 `aws ecs describe-services ... --query 'services[0].events[0:5]'` and the service's CloudWatch
-log group (`/aws/ecs/<service>/<container>`) — `TROUBLESHOOTING.md` walks through every failure
-mode actually hit doing this, in the order they were hit.
+log group (`/aws/ecs/<service>/<container>`) — see `TROUBLESHOOTING.md` for common failure modes.
 
 ## Tearing down
 
@@ -172,13 +158,11 @@ the public ALB. Treat it as a follow-up once the base HTTP deployment above is c
 ## Design notes: what's different from `copilot-ecs`
 
 1. **Every service is fronted by a load balancer**, not just `ui`. Internal ALBs mediate
-   `ui → server`, `server → vectors`, and `server → mcp`. `vectors → metrics` is the one hop
-   still on Service Connect, with no ALB — confirmed: `vectors` is the only caller of `metrics`
-   (Qdrant), so this direct hop is correct as built, not a placeholder.
-2. **`mcp` is a 5th service**, added here — it already existed as a real Go service wired into
-   this repo's Kubernetes Helm chart, just missing from the Copilot ECS docs.
+   `ui → server`, `server → vectors`, and `server → mcp`. `vectors → metrics` and
+   `server → metrics` stay on Service Connect, with no ALB in front of `metrics` — `server` has
+   a client-only Service Connect membership just to resolve `metrics`' bare name for its direct
+   Qdrant client, and publishes no alias of its own.
+2. **`mcp` is a 5th service**, added here alongside the original 4 (`server`, `ui`, `metrics`,
+   `vectors`).
 3. **NAT Gateway + private subnets**, instead of Copilot's no-NAT/public-subnet default — since
    every task is now fronted by an ALB anyway, private subnets are the more natural fit.
-
-LiteLLM was investigated and found to be a disconnected, experimental Helm chart (its own
-Postgres/Redis) not wired into the app anywhere — out of scope here.

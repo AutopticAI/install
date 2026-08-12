@@ -24,9 +24,13 @@ variable "tenant_short_name" {
 }
 
 variable "vpc_cidr" {
+  # If you already have other VPCs in this account (e.g. an EKS cluster's own VPC), pick a
+  # range that doesn't overlap with them -- two VPCs with the same CIDR can each be created
+  # fine on their own, but can never be peered or connected through a Transit Gateway later
+  # without hitting a route conflict.
   description = "CIDR block for the VPC."
   type        = string
-  default     = "10.0.0.0/16"
+  default     = "10.1.0.0/16"
 }
 
 variable "single_nat_gateway" {
@@ -144,7 +148,7 @@ variable "mcp_server_id" {
 }
 
 variable "mcp_server_token" {
-  description = "Bearer token clients must present as X-MCP-Token. Leave empty to auto-generate one via random_password."
+  description = "mcp's own outbound service credential to api-v2 (x-api-token), NOT the X-MCP-Token clients send. Must match a real mcp.autoptic.service.<mcp_server_id> secret already stored in api-v2 -- leaving this empty auto-generates a random value that will not match anything and silently breaks mcp's outbound auth."
   type        = string
   default     = ""
   sensitive   = true

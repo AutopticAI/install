@@ -1,7 +1,7 @@
 # Troubleshooting
 
-Every error below actually happened doing this install against a real AWS account. They're
-ordered the way they were hit, since several build on each other.
+Common errors you may hit during this install, with how to diagnose and fix each. Several of
+these build on each other, so read them in order the first time through.
 
 ## `terraform plan` fails: `for_each` on `aws_efs_mount_target`
 
@@ -31,11 +31,11 @@ InvalidRequestException: You can't create this secret because a secret with this
 already scheduled for deletion.
 ```
 
-AWS keeps a deleted secret's name reserved for a 30-day recovery window. This happened three
-times in one session — each time traced back to a `terraform destroy` (or a `-replace`) run
-between retries, which schedules the secret for deletion instead of removing it outright. **If
-you're retrying a failed apply, retry the apply directly — don't `destroy` first.** If you're
-already stuck with an orphaned secret and don't need the old value:
+AWS keeps a deleted secret's name reserved for a 30-day recovery window. A `terraform destroy`
+(or a `-replace`) run between retries schedules the secret for deletion instead of removing it
+outright, and the next apply then hits this error. **If you're retrying a failed apply, retry
+the apply directly — don't `destroy` first.** If you're already stuck with an orphaned secret
+and don't need the old value:
 
 ```bash
 aws secretsmanager delete-secret --secret-id <name> --force-delete-without-recovery
@@ -120,12 +120,10 @@ subdirectory, not the root filesystem itself. `vectors` has no volume mount at a
 import-time `tempfile.TemporaryDirectory()` call (a side effect of importing `torch.distributed`)
 had nowhere writable at all.
 
-Confirmed against the Kubernetes Helm chart before fixing: `values.yaml` sets
-`containerSecurityContext.readOnlyRootFilesystem: false` explicitly, for every service, with **no**
-`emptyDir`/tmpfs volume alongside it. Fixed the same way here: `readonlyRootFilesystem = false`
-on all 7 containers (`init`, `server`, `scheduler`, `ui`, `metrics`, `vectors`, `mcp`), no extra
-volume. If you add a new container later and it needs to write anywhere outside a declared
-volume mount — even to `/tmp` — set this explicitly; don't rely on the module's default.
+**Fix:** Set `readonlyRootFilesystem = false` explicitly on the container. This template already
+sets it on all 7 containers (`init`, `server`, `scheduler`, `ui`, `metrics`, `vectors`, `mcp`).
+If you add a new container later and it needs to write anywhere outside a declared volume mount
+— even to `/tmp` — set this explicitly; don't rely on the module's default.
 
 ## `vectors`' `/health` returns `404`
 
@@ -154,48 +152,20 @@ REST port (6333) is a different port than the one `server` uses (6334, gRPC, via
 
 ## Service Connect names are bare, never FQDNs
 
-This is the one that needed live debugging to actually root-cause, not just reading code. The
-symptom: `QDRANT_URL` set to `http://metrics.<env>.<app>.local:6333` (the FQDN pattern used
-throughout Copilot's own docs, and originally copied into this config's comments too) — and
-`vectors` still couldn't reach `metrics`, timing out at the socket level.
+**When:** `QDRANT_URL` (or any similar internal URL) is set to
+`http://metrics.<env>.<app>.local:6333` — an FQDN — and the target service still can't be
+reached, timing out at the socket level.
 
-Temporarily enabled ECS Exec to check directly (`enable_execute_command = true` on the service,
-removed again afterward):
+**Why:** ECS Service Connect does not publish a queryable DNS record. It resolves only the bare
+alias name (exactly the `client_alias.dns_name` value, no namespace suffix), and only from a
+task that is itself in the same Service Connect mesh
+(`service_connect_configuration.enabled = true` on that service). You can confirm this from
+inside a running task with ECS Exec (`aws ecs execute-command`) by checking `/etc/hosts` for the
+bare name.
 
-```bash
-aws ecs execute-command --cluster <cluster> --task <task-arn> --container vectors --interactive \
-  --command "/bin/sh -c 'getent hosts metrics.<env>.<app>.local; echo DONE'"
-```
+**Fix:** Use the bare name — `QDRANT_URL = "http://metrics:6333"`, not the FQDN form.
 
-Returned nothing — no record. Sanity-checked with the service's *own* alias
-(`vectors.<env>.<app>.local`, registered on the very same task): also nothing. Then:
-
-```bash
-aws ecs execute-command --cluster <cluster> --task <task-arn> --container vectors --interactive \
-  --command "/bin/sh -c 'cat /etc/hosts; echo DONE'"
-```
-
-```
-127.255.0.1 metrics
-2600:f0f0:0:0:0:0:0:1 metrics
-127.255.0.2 vectors
-2600:f0f0:0:0:0:0:0:2 vectors
-```
-
-**ECS Service Connect does not publish a real DNS record at all.** It statically injects the
-bare alias name (exactly the `client_alias.dns_name` value, no namespace suffix) into
-`/etc/hosts`, mapped to a reserved `127.255.x.x`/`2600:f0f0::` address that the injected Envoy
-sidecar intercepts via `iptables`, based on destination port. This is a genuinely different
-mechanism from plain Cloud Map `DNS_PRIVATE` namespaces (which *do* create real, queryable
-Route 53 records) — and Copilot's own docs describe the latter, not what ECS Service Connect
-actually does. If you're translating any Copilot Cloud Map naming convention into a
-Service-Connect-based Terraform config, assume it's wrong until you've confirmed it live the
-same way.
-
-Fix: `QDRANT_URL = "http://metrics:6333"` — bare name. Confirmed via the container's own logs:
-`GET /health HTTP/1.1" 200 OK`.
-
-**A follow-on deadlock while fixing this:** don't rename an existing `discovery_name` in the
+**A follow-on issue while fixing this:** don't rename an existing `discovery_name` in the
 same `terraform apply` that adds a new `client_alias` entry for the same service. Doing so hits:
 
 ```
@@ -207,3 +177,15 @@ AWS won't let a `client_alias` move to a new `discovery_name` while the old one 
 the running service — `UpdateService` validates the new registration before the old one is torn
 down. Leave existing `discovery_name` values alone when adding a new port/alias to an existing
 service; only the *new* entry needs a new name.
+
+## `server`'s search or upsert operations against Qdrant don't work
+
+**When:** `ui`, `vectors`, and the ALB health checks all report healthy, but `server`'s search
+or upsert operations against Qdrant fail.
+
+**Why:** `server` connects to Qdrant directly (via `config.json`'s
+`vector.qdrant_host`/`qdrant_port`), separately from `vectors`' own internal Qdrant client. This
+needs two things together: `server` must be in the Service Connect mesh (`ecs.tf`'s
+`server.service_connect_configuration`, already set in this template), and `config.json`'s
+`vector.qdrant_host` must be the bare name `metrics`, not an FQDN (see "Service Connect names are
+bare, never FQDNs" above) — check both if this still fails.

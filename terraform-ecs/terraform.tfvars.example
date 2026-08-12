@@ -3,7 +3,7 @@ app               = "autoptic"
 env               = "<ENV_NAME>"              # e.g. "prod", "staging", "test"
 tenant_short_name = "<YOUR_TENANT_SHORT_NAME>" # lowercase letters/digits only, matches config.json's tenant short name
 
-# vpc_cidr           = "10.0.0.0/16"
+# vpc_cidr           = "10.1.0.0/16"
 # single_nat_gateway = true   # true = 1 shared NAT Gateway (cheaper); false = 1 per AZ (HA)
 # container_insights = false
 
