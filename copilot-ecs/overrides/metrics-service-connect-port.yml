@@ -1,0 +1,43 @@
+# copilot/metrics/overrides/cfn.patches.yml
+#
+# Copilot's Backend Service manifest schema only lets `image.port` declare one port per
+# container — there is no array form, and no documented multi-port Service Connect mechanism
+# as of this writing (confirmed against aws/copilot-cli's own GitHub discussions on the
+# subject; the maintainers' own recommended workaround is exactly this: a YAML patch adding a
+# second container port and a second Service Connect entry by hand). `metrics-manifest.yml`
+# only exposes port 6334 (Qdrant's gRPC port, what `server` uses via config.json). `vectors`
+# needs Qdrant's REST port, 6333, for its own `/health` check and its `QdrantClient(url=...)`
+# calls (see vectors-manifest.yml's `QDRANT_URL`) — this patch adds that second port under the
+# same Service Connect alias ("metrics") metrics already registers for 6334.
+#
+# UNTESTED against a real Copilot deployment — the underlying mechanism (a second
+# aws_service_discovery-style Service Connect entry, same client_alias.dns_name, different
+# port) is confirmed working in this repo's plain-Terraform ECS port (see
+# solutions/ecs/ecs.tf's metrics service_connect_configuration, which uses this exact
+# two-port/one-alias shape and was verified live against a real AWS account). This file
+# translates that same shape into Copilot's CloudFormation patch mechanism
+# (https://aws.github.io/copilot-cli/docs/developing/overrides/yamlpatch/), but the JSON Patch
+# paths below have not themselves been run through `copilot svc deploy`. Verify the array
+# indices (`ContainerDefinitions/0`, `Services/0`) against your own environment's generated
+# template with `copilot svc package --name metrics --output-dir tmp` before applying, in case
+# a future Copilot CLI version orders these resources or containers differently.
+#
+# To use: run `copilot svc override --name metrics --resources cfn` once (creates the
+# `copilot/metrics/overrides/` directory and initial scaffold if it doesn't already exist),
+# then place this content in `copilot/metrics/overrides/cfn.patches.yml`.
+
+- op: add
+  path: /Resources/TaskDefinition/Properties/ContainerDefinitions/0/PortMappings/-
+  value:
+    ContainerPort: 6333
+    Name: metrics-6333
+    Protocol: tcp
+
+- op: add
+  path: /Resources/Service/Properties/ServiceConnectConfiguration/Services/-
+  value:
+    PortName: metrics-6333
+    DiscoveryName: metrics-rest
+    ClientAliases:
+      - Port: 6333
+        DnsName: metrics

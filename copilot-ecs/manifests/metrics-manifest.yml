@@ -18,6 +18,11 @@ image:
   # Without it, Copilot never registers this service under Service Connect/Cloud Map at
   # all — no DNS record gets created, and callers (server) fail with a gRPC/DNS error
   # like "name resolver error: produced zero addresses", not a connection-refused error.
+  #
+  # 6334 is Qdrant's gRPC port (server, via config.json). It is NOT the only port callers
+  # need: vectors needs Qdrant's REST port, 6333, for its own /health check and search calls.
+  # Copilot's manifest schema has no multi-port field for a single Backend Service — see
+  # ../overrides/metrics-service-connect-port.yml for the YAML patch that adds it.
   port: 6334
 
 cpu: 256

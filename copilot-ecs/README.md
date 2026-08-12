@@ -18,6 +18,10 @@ copilot-ecs/
 │   └── vectors-manifest.yml
 ├── addons/
 │   └── server-policy.yml      ← IAM task role policy for server/scheduler
+├── overrides/
+│   └── metrics-service-connect-port.yml   ← YAML patch: exposes Qdrant's REST port (6333)
+│                                             on metrics, which vectors needs and no manifest
+│                                             field can declare directly (see the file itself)
 ├── TROUBLESHOOTING.md          ← every error we hit and how we fixed it
 ├── DNS-TLS-SETUP.md            ← custom domain + HTTPS setup
 └── TEARDOWN.md                 ← how to delete everything, including what Copilot won't

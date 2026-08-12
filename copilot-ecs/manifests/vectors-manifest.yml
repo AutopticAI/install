@@ -29,3 +29,11 @@ network:
   connect: true
   vpc:
     placement: public   # only needed if your environment has no NAT Gateway
+
+# vectors' own /health check (and its /search route) needs Qdrant's REST port, 6333 — a
+# different port than the 6334 (gRPC) that server's config.json uses. Copilot's manifest
+# schema only lets a Backend Service declare one `image.port`, so metrics' second port has to
+# come from a YAML patch override — see overrides/metrics-service-connect-port.yml in this
+# directory, and apply it before this variable will actually resolve to anything.
+variables:
+  QDRANT_URL: http://metrics:6333

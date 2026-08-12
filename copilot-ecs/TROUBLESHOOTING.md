@@ -251,3 +251,28 @@ variables:
 ```
 Do not rely on the browser-facing settings field for this — it's validated client-side and
 can never succeed against a private DNS name.
+
+---
+
+## `vectors`' `/health` reports `Qdrant unreachable`, or `vectors` fails Qdrant queries
+
+**When:** `vectors` starts fine and its own logs show requests reaching `/health`, but the
+response is a `503` complaining Qdrant is unreachable, or real search/embed calls that
+touch Qdrant fail outright.
+
+**Why:** `vectors` needs Qdrant's REST port, 6333, for its own health check and its
+`QdrantClient(url=...)` calls — a different port than the 6334 (gRPC) that `server` uses via
+`config.json`. `metrics-manifest.yml`'s `image.port` field only declares one port per
+Backend Service — Copilot has no manifest field for a second port, and no documented
+multi-port Service Connect mechanism as of this writing (confirmed against upstream
+`aws/copilot-cli` GitHub discussions on the same limitation). Without it, `metrics` never
+registers 6333 under Service Connect at all, so nothing — not even a correctly-configured
+`vectors` — can reach it.
+
+**Fix:** apply the YAML patch in `overrides/metrics-service-connect-port.yml`, which adds
+the missing port mapping and a second Service Connect entry for it, and set `vectors`'
+`QDRANT_URL` (already in `manifests/vectors-manifest.yml`) to use it. See that override
+file's own comments for exactly how to apply it, and for the caveat that its resource
+indices should be checked against your own environment's generated template before
+applying, since this workaround was not run through a real `copilot svc deploy` in this
+repo.
