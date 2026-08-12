@@ -119,7 +119,7 @@ Priority: configJsonString > configJson > default structure from env vars
 {{- $_ := set $config "scheduler" (dict "refresh_interval" .Values.scheduler.env.refreshInterval "api_endpoint" .Values.scheduler.env.apiEndpoint "api_token" .Values.scheduler.env.apiToken "timeout" .Values.scheduler.env.timeout) }}
 {{- $_ := set $config "tasks" (dict "generate" "default" "analyze" "default") }}
 {{- $_ := set $config "secrets" (dict "default" "default") }}
-{{- $_ := set $config "vector" (dict "size" 1024 "model" "e5-large-v2" "embed_url" "http://vectors-service.autoptic.svc.cluster.local:8000" "qdrant_host" "metrics-service.autoptic.svc.cluster.local" "qdrant_port" 6334 "vector_search_timeout_sec" 30) }}
+{{- $_ := set $config "vector" (dict "size" 1024 "model" "e5-large-v2" "embed_url" (printf "http://vectors-service.%s.svc.cluster.local:8000" .Values.namespace.name) "qdrant_host" (printf "metrics-service.%s.svc.cluster.local" .Values.namespace.name) "qdrant_port" 6334 "vector_search_timeout_sec" 30) }}
 {{- $_ := set $config "retry" (dict "max_retries" 3 "initial_backoff_ms" 100 "max_backoff_ms" 5000) }}
 {{- $_ := set $config "llm" (dict "max_chunks" 20 "chunk_overlap_tokens" 100 "token_estimation_ratio" 3 "rate_limit_delay_ms" 1000 "max_concurrent_requests" 3 "requests_per_minute" 60) }}
 {{- if .Values.config.configJson }}
