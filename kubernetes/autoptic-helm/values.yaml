@@ -130,8 +130,12 @@ mcp:
   replicas: 1
   secretName: autoptic-mcp-secrets
 
-  # Required: a real random token clients must send as the X-MCP-Token header.
-  # Optional: an Autoptic API bearer token forwarded upstream per-request.
+  # mcpServerToken (MCP_SERVER_TOKEN): the mcp pod's own credential to the Autoptic API.
+  # Leave empty and this chart generates one on first install, then keeps that same
+  # value on every later upgrade. This is NOT the value an MCP client sends as
+  # X-MCP-Token — see "MCP Server" in the README for that separate, per-endpoint token,
+  # which this chart does not create.
+  # autopticApiToken is optional: an Autoptic API bearer token forwarded upstream per-request.
   # Ignored (and this Secret is not created) when externalSecrets.enabled=true —
   # sync the same two keys via your ExternalSecret in that case.
   secrets:

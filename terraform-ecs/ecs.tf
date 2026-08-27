@@ -384,10 +384,9 @@ module "ecs" {
           # This is the fix for the vectors crash: torch's import chain calls
           # tempfile.TemporaryDirectory() as a side effect, and vectors has no EFS mount to fall
           # back on (unlike server/ui/metrics), so a read-only root filesystem leaves it with
-          # nowhere writable at all. The Helm chart sets this the same way for every service
-          # (see values.yaml's containerSecurityContext.readOnlyRootFilesystem), with no
-          # tmpfs/emptyDir volume alongside it -- the module's readonlyRootFilesystem default of
-          # true was never an intentional choice on our side, just an unexamined module default.
+          # nowhere writable at all. No tmpfs/emptyDir volume is added alongside it -- the
+          # module's readonlyRootFilesystem default of true was never an intentional choice
+          # here, just an unexamined module default.
           readonlyRootFilesystem = false
           image                  = var.vectors_image
           portMappings           = [{ containerPort = 8000, name = "vectors-8000", protocol = "tcp" }]

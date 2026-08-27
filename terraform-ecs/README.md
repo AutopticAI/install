@@ -135,6 +135,16 @@ All five should be `rolloutState: COMPLETED` with `healthy` targets. If any aren
 `aws ecs describe-services ... --query 'services[0].events[0:5]'` and the service's CloudWatch
 log group (`/aws/ecs/<service>/<container>`) — see `TROUBLESHOOTING.md` for common failure modes.
 
+`describe-services` only keeps a short rolling window of events, and loses them entirely when a
+service is recreated. `events.tf` mirrors the same deployment, service-action, and task events
+into `/aws/events/ecs/<app>-<env>`, which survives both — see
+[ECS-DEPLOYMENT-LOGGING.md](./ECS-DEPLOYMENT-LOGGING.md) for the query recipes. To watch a
+deployment as it happens:
+
+```bash
+aws logs tail "$(terraform output -raw ecs_events_log_group_name)" --follow --format short
+```
+
 ## Tearing down
 
 ```bash
@@ -158,10 +168,11 @@ the public ALB. Treat it as a follow-up once the base HTTP deployment above is c
 ## Design notes: what's different from `copilot-ecs`
 
 1. **Every service is fronted by a load balancer**, not just `ui`. Internal ALBs mediate
-   `ui → server`, `server → vectors`, and `server → mcp`. `vectors → metrics` and
-   `server → metrics` stay on Service Connect, with no ALB in front of `metrics` — `server` has
-   a client-only Service Connect membership just to resolve `metrics`' bare name for its direct
-   Qdrant client, and publishes no alias of its own.
+   `ui → server`, `server → vectors`, and `mcp → server` (`mcp`'s own outbound call). `mcp`'s
+   own ALB has no internal caller — it exists for external MCP clients, over `X-MCP-Token`.
+   `vectors → metrics` and `server → metrics` stay on Service Connect, with no ALB in front of
+   `metrics` — `server` has a client-only Service Connect membership just to resolve `metrics`'
+   bare name for its direct Qdrant client, and publishes no alias of its own.
 2. **`mcp` is a 5th service**, added here alongside the original 4 (`server`, `ui`, `metrics`,
    `vectors`).
 3. **NAT Gateway + private subnets**, instead of Copilot's no-NAT/public-subnet default — since

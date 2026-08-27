@@ -1,11 +1,12 @@
 # All 6 security groups are created via terraform-aws-modules/security-group/aws. 4 plain
 # aws_vpc_security_group_ingress_rule resources appear further down for the "ALB -> tasks"
 # direction of 4 mutually-referencing SG pairs — see the comment on module "sg_tasks" for why:
-# only that module's exclusive-rules mechanism actually needs disabling. The 4 ALB modules
-# below each reference sg_tasks in one direction only (their own "from_tasks" rule) and are
-# never referenced back from inside sg_tasks's own `ingress_rules` map (that direction lives
-# in the plain resources instead) — so enabling exclusive rules on these 4 is safe, and left on
-# so Terraform still detects/reverts any ingress or egress rule added out of band on them.
+# only that module's exclusive-rules mechanism actually needs disabling. The 4 ALB security
+# groups (sg_alb_public, plus the 3 in module.sg_alb below) each reference sg_tasks in one
+# direction only (their own "from_tasks" rule) and are never referenced back from inside
+# sg_tasks's own `ingress_rules` map (that direction lives in the plain resources instead) —
+# so enabling exclusive rules on these 4 is safe, and left on so Terraform still detects/reverts
+# any ingress or egress rule added out of band on them.
 
 module "sg_alb_public" {
   source  = "terraform-aws-modules/security-group/aws"
@@ -25,52 +26,28 @@ module "sg_alb_public" {
   tags = local.tags
 }
 
-module "sg_alb_server" {
-  source  = "terraform-aws-modules/security-group/aws"
-  version = "6.0.0"
-
-  name        = "${local.name_prefix}-alb-server"
-  description = "Internal ALB in front of server (called by ui)"
-  vpc_id      = module.vpc.vpc_id
-
-  ingress_rules = {
-    from_tasks = { referenced_security_group_id = module.sg_tasks.id, from_port = 9999, to_port = 9999 }
+# server, vectors, and mcp each get an internal ALB with the identical security-group shape:
+# ingress from sg_tasks on the service's own port, wide-open egress. One for_each module
+# replaces what were 3 near-identical blocks, differing only in name, description, and port.
+locals {
+  internal_albs = {
+    server  = { port = 9999, description = "Internal ALB in front of server (called by ui and mcp)" }
+    vectors = { port = 8000, description = "Internal ALB in front of vectors (called by server)" }
+    mcp     = { port = 7000, description = "Internal ALB in front of mcp (called by external MCP clients, not from inside this stack)" }
   }
-  egress_rules = {
-    all = { cidr_ipv4 = "0.0.0.0/0", ip_protocol = "-1", from_port = -1, to_port = -1 }
-  }
-
-  tags = local.tags
 }
 
-module "sg_alb_vectors" {
-  source  = "terraform-aws-modules/security-group/aws"
-  version = "6.0.0"
+module "sg_alb" {
+  source   = "terraform-aws-modules/security-group/aws"
+  version  = "6.0.0"
+  for_each = local.internal_albs
 
-  name        = "${local.name_prefix}-alb-vectors"
-  description = "Internal ALB in front of vectors (called by server)"
+  name        = "${local.name_prefix}-alb-${each.key}"
+  description = each.value.description
   vpc_id      = module.vpc.vpc_id
 
   ingress_rules = {
-    from_tasks = { referenced_security_group_id = module.sg_tasks.id, from_port = 8000, to_port = 8000 }
-  }
-  egress_rules = {
-    all = { cidr_ipv4 = "0.0.0.0/0", ip_protocol = "-1", from_port = -1, to_port = -1 }
-  }
-
-  tags = local.tags
-}
-
-module "sg_alb_mcp" {
-  source  = "terraform-aws-modules/security-group/aws"
-  version = "6.0.0"
-
-  name        = "${local.name_prefix}-alb-mcp"
-  description = "Internal ALB in front of mcp (called by server)"
-  vpc_id      = module.vpc.vpc_id
-
-  ingress_rules = {
-    from_tasks = { referenced_security_group_id = module.sg_tasks.id, from_port = 7000, to_port = 7000 }
+    from_tasks = { referenced_security_group_id = module.sg_tasks.id, from_port = each.value.port, to_port = each.value.port }
   }
   egress_rules = {
     all = { cidr_ipv4 = "0.0.0.0/0", ip_protocol = "-1", from_port = -1, to_port = -1 }
@@ -124,7 +101,7 @@ resource "aws_vpc_security_group_ingress_rule" "tasks_from_alb_public" {
 
 resource "aws_vpc_security_group_ingress_rule" "tasks_from_alb_server" {
   security_group_id            = module.sg_tasks.id
-  referenced_security_group_id = module.sg_alb_server.id
+  referenced_security_group_id = module.sg_alb["server"].id
   from_port                    = 9999
   to_port                      = 9999
   ip_protocol                  = "tcp"
@@ -133,7 +110,7 @@ resource "aws_vpc_security_group_ingress_rule" "tasks_from_alb_server" {
 
 resource "aws_vpc_security_group_ingress_rule" "tasks_from_alb_vectors" {
   security_group_id            = module.sg_tasks.id
-  referenced_security_group_id = module.sg_alb_vectors.id
+  referenced_security_group_id = module.sg_alb["vectors"].id
   from_port                    = 8000
   to_port                      = 8000
   ip_protocol                  = "tcp"
@@ -142,7 +119,7 @@ resource "aws_vpc_security_group_ingress_rule" "tasks_from_alb_vectors" {
 
 resource "aws_vpc_security_group_ingress_rule" "tasks_from_alb_mcp" {
   security_group_id            = module.sg_tasks.id
-  referenced_security_group_id = module.sg_alb_mcp.id
+  referenced_security_group_id = module.sg_alb["mcp"].id
   from_port                    = 7000
   to_port                      = 7000
   ip_protocol                  = "tcp"

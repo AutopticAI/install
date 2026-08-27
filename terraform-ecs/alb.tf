@@ -22,7 +22,7 @@ resource "aws_lb_target_group" "ui" {
   vpc_id      = module.vpc.vpc_id
   target_type = "ip"
 
-  # /health confirmed from the Kubernetes Helm chart's ui probes (values.yaml).
+  # /health is ui's own health check route.
   health_check {
     path    = "/health"
     matcher = "200-399"
@@ -47,7 +47,7 @@ resource "aws_lb" "internal_server" {
   internal           = true
   load_balancer_type = "application"
   subnets            = module.vpc.private_subnets
-  security_groups    = [module.sg_alb_server.id]
+  security_groups    = [module.sg_alb["server"].id]
 
   tags = local.tags
 }
@@ -83,7 +83,7 @@ resource "aws_lb" "internal_vectors" {
   internal           = true
   load_balancer_type = "application"
   subnets            = module.vpc.private_subnets
-  security_groups    = [module.sg_alb_vectors.id]
+  security_groups    = [module.sg_alb["vectors"].id]
 
   tags = local.tags
 }
@@ -95,7 +95,7 @@ resource "aws_lb_target_group" "vectors" {
   vpc_id      = module.vpc.vpc_id
   target_type = "ip"
 
-  # /health confirmed from the Kubernetes Helm chart's vectors probes (templates/vectors.yaml).
+  # /health is vectors' own health check route.
   health_check {
     path    = "/health"
     matcher = "200-399"
@@ -120,7 +120,7 @@ resource "aws_lb" "internal_mcp" {
   internal           = true
   load_balancer_type = "application"
   subnets            = module.vpc.private_subnets
-  security_groups    = [module.sg_alb_mcp.id]
+  security_groups    = [module.sg_alb["mcp"].id]
 
   tags = local.tags
 }

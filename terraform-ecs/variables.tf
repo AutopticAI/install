@@ -129,7 +129,7 @@ variable "mcp_memory" {
 # --- server-specific ---
 
 variable "server_health_path" {
-  description = "Health check path on server's port 9999. Confirmed from the Kubernetes Helm chart's probes (values.yaml api.livenessProbe/readinessProbe)."
+  description = "Health check path on server's port 9999."
   type        = string
   default     = "health"
 }
@@ -142,13 +142,13 @@ variable "mcp_admin_tools_enabled" {
 }
 
 variable "mcp_server_id" {
-  description = "Required for the streamable_http transport. Must match a key suffix in the external token registry -- see mcp-server-id-env-var in the vault for context."
+  description = "Required for the streamable_http transport. Must match a key suffix in the external token registry that mcp's outbound token is checked against."
   type        = string
   default     = "local-demo"
 }
 
 variable "mcp_server_token" {
-  description = "mcp's own outbound service credential to api-v2 (x-api-token), NOT the X-MCP-Token clients send. Must match a real mcp.autoptic.service.<mcp_server_id> secret already stored in api-v2 -- leaving this empty auto-generates a random value that will not match anything and silently breaks mcp's outbound auth."
+  description = "mcp's own outbound service credential to the Autoptic API (x-api-token), NOT the X-MCP-Token clients send. Must match a real mcp.autoptic.service.<mcp_server_id> secret already stored server-side -- leaving this empty auto-generates a random value that will not match anything and silently breaks mcp's outbound auth."
   type        = string
   default     = ""
   sensitive   = true
@@ -165,4 +165,16 @@ variable "config_json_path" {
   description = "Local path to the edited config.json to upload to the deploy-artifacts bucket."
   type        = string
   default     = "./config.json"
+}
+
+# --- Deployment event logging (events.tf) ---
+
+variable "ecs_event_log_retention_days" {
+  description = <<-EOT
+    Retention for the /aws/events/ecs/<app>-<env> log group that holds ECS deployment, service
+    action, and task state change events. These are small JSON records, not container logs, so a
+    long window is cheap. Set to 0 to keep them forever.
+  EOT
+  type        = number
+  default     = 90
 }

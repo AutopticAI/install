@@ -3,6 +3,12 @@
 Common errors you may hit during this install, with how to diagnose and fix each. Several of
 these build on each other, so read them in order the first time through.
 
+Most entries below were originally diagnosed from `aws ecs describe-services` and stopped-task
+reasons, which are both short-lived. The same events are now mirrored into a CloudWatch log group
+that outlives the task and the service — see
+[ECS-DEPLOYMENT-LOGGING.md](./ECS-DEPLOYMENT-LOGGING.md). If the failing task is already gone,
+start there.
+
 ## `terraform plan` fails: `for_each` on `aws_efs_mount_target`
 
 ```
