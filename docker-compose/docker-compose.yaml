@@ -1,0 +1,163 @@
+services:
+  # Runs once as root, before any app container starts. It creates and owns
+  # ./ui, ./metrics, and ./logs as uid:gid 1000:1000, the fixed non-root user
+  # that server, scheduler, ui, and metrics all run as. Without this step, a
+  # host directory created under a different OS user (or a stale directory
+  # from an older image that ran as root) leaves the app container unable to
+  # read or write it, which is what breaks investigations.
+  init_permissions:
+    image: busybox:1.36.1
+    user: "0:0"
+    command:
+      - sh
+      - -c
+      - |
+        mkdir -p /data/ui /data/metrics /data/logs
+        chown -R 1000:1000 /data/ui /data/metrics /data/logs
+    volumes:
+      - ./ui:/data/ui
+      - ./metrics:/data/metrics
+      - ./logs:/data/logs
+
+  # Copies ~/.aws and ~/pql from the host into two Docker-managed volumes
+  # owned by uid:gid 1000:1000, the fixed user server/scheduler run as. A
+  # direct bind mount of ~/.aws or ~/pql fails whenever the host directory,
+  # or one of its parents, is not readable by uid 1000 -- a 700-mode ~/.aws
+  # is the normal default on most systems, and this is the same class of bug
+  # that init_permissions fixes for ./ui, ./metrics, ./logs. This step runs
+  # as root, which can read the host files regardless of their mode, then
+  # hands a uid-1000-owned copy to the app containers. It reruns on every
+  # `docker compose up`/restart, so a rotated AWS credential on the host is
+  # picked up on the next restart, not live while containers keep running.
+  init_credentials:
+    image: busybox:1.36.1
+    user: "0:0"
+    command:
+      - sh
+      - -c
+      - |
+        mkdir -p /data/aws /data/pql
+        cp -a /host-aws/. /data/aws/
+        cp -a /host-pql/. /data/pql/
+        chown -R 1000:1000 /data/aws /data/pql
+    volumes:
+      - ~/.aws:/host-aws:ro
+      - ~/pql:/host-pql:ro
+      - aws_creds:/data/aws
+      - pql_data:/data/pql
+
+  server:
+    image: autoptic/server:latest
+    user: "1000:1000"
+    ports:
+      - "9999:9999"
+    environment:
+      - AWS_PROFILE=default
+      - AWS_CONFIG_FILE=/home/appuser/.aws/config
+      - AWS_SHARED_CREDENTIALS_FILE=/home/appuser/.aws/credentials
+    volumes:
+      - ./config.json:/server/config.json:ro
+      - aws_creds:/home/appuser/.aws:ro
+      - pql_data:/home/appuser/pql:ro
+    command: ["api", "-config", "/server/config.json"]
+    depends_on:
+      init_permissions:
+        condition: service_completed_successfully
+      init_credentials:
+        condition: service_completed_successfully
+
+  ui:
+    image: autoptic/ui:latest
+    volumes:
+      - ./ui:/app/backend/data
+    depends_on:
+      init_permissions:
+        condition: service_completed_successfully
+    ports:
+      - "8080:8080"
+
+  scheduler:
+    image: autoptic/server:latest
+    user: "1000:1000"
+    network_mode: service:server
+    environment:
+      - AWS_PROFILE=default
+      - AWS_CONFIG_FILE=/home/appuser/.aws/config
+      - AWS_SHARED_CREDENTIALS_FILE=/home/appuser/.aws/credentials
+    volumes:
+      - ./config.json:/server/config.json:ro
+      - aws_creds:/home/appuser/.aws:ro
+      - pql_data:/home/appuser/pql:ro
+    command: ["scheduler", "-config", "/server/config.json"]
+    depends_on:
+      server:
+        condition: service_started
+      init_credentials:
+        condition: service_completed_successfully
+
+  mcp:
+    image: autoptic/mcp:latest
+    ports:
+      - "7000:7000"
+    environment:
+      - AUTOPTIC_API_BASE_URL=http://server:9999/
+      - SERVER_PORT=7000
+      - AUTOPTIC_API_TOKEN=
+      - MCP_ADMIN_TOOLS_ENABLED=false
+      - MCP_SERVER_TOKEN=something
+      - MCP_SERVER_ID=local-demo
+    depends_on:
+      server:
+        condition: service_started
+
+  # Path-based reverse proxy in front of mcp and ui. Both are reached by
+  # service name on the default Compose network. Edit ./nginx/mcp.conf for
+  # your own domain and port.
+  nginx:
+    image: nginx:1.27-alpine
+    ports:
+      - "6767:6767"
+    volumes:
+      - ./nginx/mcp.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      mcp:
+        condition: service_started
+      ui:
+        condition: service_started
+    restart: unless-stopped
+
+  metrics:
+    image: autoptic/metrics:latest
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - ./metrics:/qdrant/storage
+    depends_on:
+      init_permissions:
+        condition: service_completed_successfully
+
+  vectors:
+    image: autoptic/vectors:latest
+    ports:
+      - "8000:8000"
+
+  # Optional: Local model service for GPU-accelerated inference
+  # Requires NVIDIA GPU with Docker GPU support
+  # model:
+  #   image: autoptic/model-base-gpu:latest
+  #   deploy:
+  #     resources:
+  #         reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             device_ids: ["0"]
+  #             capabilities: [gpu]
+  #   network_mode: host
+  #   ipc: host
+  #   ports:
+  #     - "9000:8000"
+
+volumes:
+  aws_creds: {}
+  pql_data: {}
