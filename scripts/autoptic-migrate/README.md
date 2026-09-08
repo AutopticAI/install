@@ -109,8 +109,14 @@ missing, the run stops and names the key. To push anyway, add
 `--assume-secrets-ready`.
 
 CAUTION: `SaveEnvironment` rejects an environment whose secret keys are
-missing from the target. Provision the keys first, or the environments in
-the bundle fail one by one.
+missing from the target, but only once that target has a secret dictionary
+at all. On a brand-new target with no secrets provisioned yet, validation
+is reduced to a template parse and skipped entirely
+(`server/secretsmanager/secrets_dictionary.go`, `skipExecute`). Every
+environment then saves with a `201` and looks migrated, and the failure
+appears later, at run time, when a step resolves a secret that was never
+there. An empty target is the quiet case, not the safe one. Provision the
+keys first.
 
 The script also scans exported environments for values that look like real
 credentials rather than templates. It reports them as warnings.
@@ -185,13 +191,20 @@ To migrate between two instances at once, forward each to its own local
 port. The examples above use 19999 for the source and 29999 for the
 target.
 
-Confirm the connection before anything else:
+Confirm the connection before anything else. Ask for the environment list,
+which is a real API route:
 
 ```bash
-curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:19999/health
+curl -s http://127.0.0.1:19999/story/ep/default/env
 ```
 
-A `200` means the API is reachable.
+A JSON array, such as `["default"]`, means the API is reachable.
+
+Do not probe `/health`. The server registers that route, but a gateway in
+front of it may not forward the path. The chaos.dev deployment routes only
+`PathPrefix /story/ep/` to the API, so `https://api.dev.autoptic.com/health`
+answers `404` while the same host serves `/story/ep/default/env` normally.
+`/health` therefore reports a healthy instance as unreachable.
 
 ### Tokens
 
@@ -227,8 +240,21 @@ CAUTION: Create the token before you turn auth on. The secret routes are
 admin-only. After enforcement starts, an operator token can no longer
 write the dictionary that holds the tokens.
 
-Write the key with the secret route. The body is base64-encoded JSON, and
-each value is an object with a `value` field:
+CAUTION: This route replaces the whole dictionary. It is not a merge. If
+the endpoint already holds secrets, read them first and send them back
+together with the new key, or you erase every secret that endpoint depends
+on. On an endpoint that already has secrets, get the current dictionary
+with an admin token first:
+
+```bash
+curl -s -H 'x-api-token: ADMIN-TOKEN' \
+  http://127.0.0.1:19999/story/ep/default/secret/default > current.json
+```
+
+Then add the new key to `current.json` and send the whole file back.
+
+On an endpoint with no secrets yet, there is nothing to preserve. The body
+is base64-encoded JSON, and each value is an object with a `value` field:
 
 ```bash
 python3 -c "
@@ -248,10 +274,6 @@ curl -s -o /dev/null -w '%{http_code}\n' \
   -H 'x-api-token: YOUR-TOKEN-HERE' \
   http://127.0.0.1:19999/story/ep/default/env
 ```
-
-CAUTION: This route replaces the whole dictionary. If the endpoint already
-holds secrets, read them first and send them back together with the new
-key. Otherwise you erase every secret that endpoint depends on.
 
 ### The preflight cannot verify secrets with an operator token
 
@@ -305,3 +327,7 @@ These shapes were confirmed live, not assumed:
 - An agent that carries inline skills moves those skills inside its own
   body. They are not separate objects, so they do not appear in a plan as
   skills. Their tools do appear.
+- The secrets preflight can only compare against a target it can read. With
+  an operator token it cannot read `/secret/default` at all, and on a target
+  with no secret dictionary the server itself stops checking. In both cases
+  a missing key surfaces at run time rather than at import time.

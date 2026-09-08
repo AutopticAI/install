@@ -23,6 +23,7 @@ import os
 import re
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -42,6 +43,27 @@ class ApiError(Exception):
         self.body = body
 
 
+def _not_json_message(url, raw, err):
+    """A 200 that is not JSON almost always means the URL is the UI host, not
+    the API host. The UI is a SvelteKit SPA with a catch-all route: it answers
+    EVERY path -- API paths included -- with HTTP 200 and its HTML shell. The
+    bare JSONDecodeError that falls out of that ("Expecting value: line 1
+    column 1") points at nothing, so name the likely cause instead. Confirmed
+    live against chaos.dev.autoptic.com (UI) vs api.dev.autoptic.com (API)."""
+    head = raw[:200].lstrip()
+    looks_html = head[:1] == "<" or head[:9].lower() == "<!doctype"
+    lines = [f"GET {url} returned HTTP 200 but the body is not JSON ({err})."]
+    if looks_html:
+        lines.append(
+            "The body is HTML. This URL is almost certainly the UI host rather than the "
+            "API host. The UI serves its HTML shell with HTTP 200 for every path, so it "
+            "never 404s and a JSON client dies here instead."
+        )
+    lines.append("Confirm which host you have -- the API answers with a JSON array:")
+    lines.append(f"    curl -s {url}")
+    return "\n".join(lines)
+
+
 class Client:
     """One instance: a base URL + endpoint_id + token.
 
@@ -52,7 +74,10 @@ class Client:
     """
 
     def __init__(self, base_url, endpoint_id, token=None, timeout=30):
-        self.base = base_url.rstrip("/") + f"/story/ep/{endpoint_id}"
+        # quote() the endpoint_id for the same reason as item ids below: an
+        # unescaped "#" would truncate the URL and silently retarget every
+        # call at the wrong endpoint.
+        self.base = base_url.rstrip("/") + f"/story/ep/{urllib.parse.quote(endpoint_id, safe='')}"
         self.token = token
         self.timeout = timeout
 
@@ -88,7 +113,12 @@ class Client:
             if treat_404_as_empty and e.status == 404:
                 return []
             raise
-        return json.loads(raw) if raw.strip() else None
+        if not raw.strip():
+            return None
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError as e:
+            raise ApiError(_not_json_message(self.base + path, raw, e), status=status, body=raw) from None
 
 
 # ---------------------------------------------------------------------------
@@ -125,7 +155,13 @@ _ROUTE = {
 
 
 def _item_path(kind, item_id):
-    return f"{_ROUTE[kind]}/{item_id}"
+    # Ids are caller-supplied names, not slugs, and nothing on the server
+    # constrains them. Unescaped, a "#" truncates the path (urllib treats the
+    # rest as a fragment and never sends it) and a "?" turns the tail into a
+    # query string -- so a GET silently reads a DIFFERENT object and a POST
+    # silently overwrites one. safe="" because even "/" must be escaped: an id
+    # containing a slash would otherwise address a route that does not exist.
+    return f"{_ROUTE[kind]}/{urllib.parse.quote(str(item_id), safe='')}"
 
 
 def list_ids(client, kind):
@@ -235,19 +271,26 @@ def enumerate_all(client, kinds=KINDS, report=print):
 
 
 def select(all_objects, all_flag, patterns_by_kind):
-    """all_objects: {kind: {id: body}}. Returns {kind: {id: body}} filtered
-    to the selection. --all takes everything; otherwise each --env/--agent/
+    """all_objects: {kind: {id: body}}. Returns ({kind: {id: body}}, unmatched),
+    the selection plus every pattern that matched nothing. --all takes everything; otherwise each --env/--agent/
     --skill/--tool pattern (glob, repeatable) is matched against ids."""
     if all_flag:
-        return {k: dict(v) for k, v in all_objects.items()}
+        return {k: dict(v) for k, v in all_objects.items()}, []
     selected = {k: {} for k in KINDS}
+    unmatched = []
     for kind, patterns in patterns_by_kind.items():
         if not patterns:
             continue
-        for item_id, body in all_objects.get(kind, {}).items():
-            if any(fnmatch.fnmatch(item_id, p) for p in patterns):
-                selected[kind][item_id] = body
-    return selected
+        for pattern in patterns:
+            hits = [i for i in all_objects.get(kind, {}) if fnmatch.fnmatch(i, pattern)]
+            if not hits:
+                # A typo'd selector otherwise selects nothing, resolves an
+                # empty closure, prints an empty summary and exits 0 -- an
+                # unnoticed no-op that reads exactly like success.
+                unmatched.append(f"--{kind} '{pattern}' matched no {kind} on the source")
+            for item_id in hits:
+                selected[kind][item_id] = all_objects[kind][item_id]
+    return selected, unmatched
 
 
 # ---------------------------------------------------------------------------
@@ -271,6 +314,16 @@ LOOKS_SECRET_KEY_RE = re.compile(r"(key|token|secret|password|credential|webhook
 BENIGN_KEY_SUFFIX_RE = re.compile(r"(_type|_method)$", re.I)
 
 
+def _is_reference(entry):
+    """The server matches this discriminator with
+    strings.EqualFold(strings.TrimSpace(...)) (server/dal/brief.go), so
+    "Reference" and " reference " are references too. Matching it exactly
+    would misclassify them as INLINE skills, and the referenced skill would
+    then never be migrated -- silently, because an inline skill legitimately
+    contributes no skill id."""
+    return str(entry.get("type") or "").strip().lower() == "reference"
+
+
 def _skill_refs(skill_ref_list):
     """An agent's skill[] entries: str (skill id), {"type":"reference",
     "name":N} (skill id), or an inline object (not a reference at all --
@@ -280,7 +333,7 @@ def _skill_refs(skill_ref_list):
     for entry in skill_ref_list or []:
         if isinstance(entry, str):
             ids.append(entry)
-        elif isinstance(entry, dict) and entry.get("type") == "reference" and entry.get("name"):
+        elif isinstance(entry, dict) and _is_reference(entry) and entry.get("name"):
             ids.append(entry["name"])
     return ids
 
@@ -295,7 +348,7 @@ def _inline_skills(skill_ref_list):
     exactly as if it were a standalone skill."""
     return [
         entry for entry in skill_ref_list or []
-        if isinstance(entry, dict) and entry.get("type") != "reference"
+        if isinstance(entry, dict) and not _is_reference(entry)
     ]
 
 
@@ -356,7 +409,13 @@ def resolve_closure(all_objects, seed, report=print):
         body = closure[kind][item_id]
         if kind == "agent":
             cfg = body.get("config") or {}
-            env_id = cfg.get("env")
+            # The server accepts "environment" as a first-class alias for
+            # "env" (dal.AgentConfigSettings; validateAgentConfig,
+            # mcpEnvironmentDataSources). Reading only "env" migrates such an
+            # agent WITHOUT its environment, and the secrets preflight then
+            # passes too, because it only scans envs that made it into the
+            # closure.
+            env_id = cfg.get("env") or cfg.get("environment")
             if env_id:
                 add("env", env_id, f"agent '{item_id}' config.env")
                 for field in ("prompt", "slack"):
@@ -365,6 +424,9 @@ def resolve_closure(all_objects, seed, report=print):
                         expected_env_entries.setdefault(env_id, set()).add(f"{field}[]: {name}")
                 for n in cfg.get("notifications") or []:
                     expected_env_entries.setdefault(env_id, set()).add(f"notifications[]: {n}")
+            for prov in body.get("providers") or []:
+                if isinstance(prov, str) and prov:
+                    provider_refs.add(prov)
             skill_list = body.get("skill") or body.get("task")
             for skill_id in _skill_refs(skill_list):
                 add("skill", skill_id, f"agent '{item_id}' skill[]")
@@ -401,16 +463,22 @@ def resolve_closure(all_objects, seed, report=print):
         env_body = closure.get("env", {}).get(env_id)
         if env_body is None:
             continue
-        have = set()
+        # Per-field, NOT a merged set of every name in the env. An agent's
+        # config.prompt names an entry in the env's prompt[]; a where[] data
+        # source that happens to share the name does not satisfy it. Merging
+        # them made a missing prompt look present.
+        have = {}
         for key in ("prompt", "slack", "notifications", "where"):
+            names_in_field = set()
             for entry in env_body.get(key) or []:
                 if isinstance(entry, dict) and entry.get("name"):
-                    have.add(entry["name"])
+                    names_in_field.add(entry["name"])
                 elif isinstance(entry, str):
-                    have.add(entry)
+                    names_in_field.add(entry)
+            have[f"{key}[]"] = names_in_field
         for expectation in sorted(names):
             field, _, name = expectation.partition(": ")
-            if name and name not in have:
+            if name and name not in have.get(field, set()):
                 warnings.append(f"env '{env_id}' is missing an expected entry named '{name}' ({field})")
 
     return closure, warnings, required_secret_keys(closure.get("env", {}).values())
@@ -478,6 +546,22 @@ def missing_secret_keys(err):
     return []
 
 
+def _secret_key_names(raw):
+    """The key names in a GET /secret/default body. The stored value is
+    whatever was last POSTed, so it is not guaranteed to be a JSON object --
+    a bare string or a list would have raised AttributeError/TypeError here
+    and aborted the run with a traceback instead of a diagnosis."""
+    if not raw.strip():
+        return set()
+    try:
+        payload = json.loads(raw)
+    except ValueError as e:
+        raise ApiError(f"the target's /secret/default is not valid JSON ({e}) -- it cannot be checked against") from None
+    if not isinstance(payload, dict):
+        raise ApiError(f"the target's /secret/default is a {type(payload).__name__}, not a JSON object of key -> {{\"value\": ...}} -- it cannot be checked against")
+    return set(payload.keys())
+
+
 def looks_like_env_secret_error(kind, err):
     """Fallback for a server build whose missing-secret 400 carries no
     secret_key/secret_keys field. Deliberately narrow: environments only,
@@ -488,8 +572,13 @@ def looks_like_env_secret_error(kind, err):
 
 
 def secrets_preflight(dst_client, required_keys, assume_ready, report=print):
-    """Never prints/stores/transports secret VALUES, key names only. Returns
-    True if it's safe to proceed."""
+    """Compares the keys the plan's environments reference against the keys
+    the target already holds. Returns True if it's safe to proceed.
+
+    GET /secret/default DOES return the target's whole plaintext secret
+    dictionary -- this function reads only .keys() off it, and never prints,
+    stores, or transports a VALUE. The response is dropped immediately below
+    for that reason; do not widen its scope."""
     if not required_keys:
         return True
     report(f"{len(required_keys)} secret key(s) referenced by the environments in this plan: {', '.join(required_keys)}")
@@ -504,7 +593,9 @@ def secrets_preflight(dst_client, required_keys, assume_ready, report=print):
 
     try:
         status, raw = dst_client.request("GET", "/secret/default")
-        target_keys = set(json.loads(raw).keys()) if raw.strip() else set()
+        # Read the key names, then let the dict (which holds every plaintext
+        # secret value on the target) go out of scope immediately.
+        target_keys = _secret_key_names(raw)
     except ApiError as e:
         if e.status == 404:
             target_keys = set()  # nothing provisioned on the target yet -- every required key is missing, not "unverifiable"
@@ -647,8 +738,15 @@ def write_bundle(out_dir, objects, manifest_extra, report=print):
         for item_id, body in items.items():
             filename = _safe_filename(item_id)
             if filename in id_map:
+                # Loop, don't suffix once: len(id_map) grows with EVERY id, not
+                # with the collisions, so a single pass can land on a name a
+                # later id already took -- and the second write would silently
+                # clobber the first, dropping an object from the bundle.
                 stem, suffix = filename.rsplit(".", 1)
-                filename = f"{stem}-{len(id_map)}.{suffix}"
+                n = 1
+                while f"{stem}-{n}.{suffix}" in id_map:
+                    n += 1
+                filename = f"{stem}-{n}.{suffix}"
             id_map[filename] = item_id
             (d / filename).write_text(json.dumps(body, indent=2, sort_keys=True))
         manifest["ids"][kind] = id_map
@@ -668,18 +766,38 @@ def _bundle_item_id(kind, body, fallback):
     return fallback
 
 
+class BundleError(Exception):
+    """A bundle directory that cannot be read as one. Raised rather than
+    letting FileNotFoundError/JSONDecodeError reach the user as a traceback:
+    a mistyped --in path and a hand-edited file with a trailing comma are
+    both ordinary operator mistakes, and both deserve a sentence."""
+
+
 def read_bundle(in_dir):
     in_dir = Path(in_dir)
-    manifest = json.loads((in_dir / "manifest.json").read_text())
-    ids_by_kind = manifest.get("ids", {})
+    if not in_dir.is_dir():
+        raise BundleError(f"{in_dir} is not a directory -- --in takes the bundle directory itself, not a file inside it")
+    manifest_path = in_dir / "manifest.json"
+    if not manifest_path.is_file():
+        raise BundleError(f"{manifest_path} not found -- {in_dir} is not a bundle (a bundle always carries manifest.json)")
+    try:
+        manifest = json.loads(manifest_path.read_text())
+    except ValueError as e:
+        raise BundleError(f"{manifest_path} is not valid JSON: {e}") from None
+    if not isinstance(manifest, dict):
+        raise BundleError(f"{manifest_path} must contain a JSON object, found {type(manifest).__name__}")
+    ids_by_kind = manifest.get("ids") or {}
     objects = {k: {} for k in KINDS}
     for kind, dirname in _DIRNAME.items():
         d = in_dir / dirname
         if not d.is_dir():
             continue
         known_ids = ids_by_kind.get(kind, {})
-        for f in d.glob("*.json"):
-            body = json.loads(f.read_text())
+        for f in sorted(d.glob("*.json")):
+            try:
+                body = json.loads(f.read_text())
+            except ValueError as e:
+                raise BundleError(f"{f} is not valid JSON: {e}") from None
             item_id = known_ids.get(f.name) or _bundle_item_id(kind, body, f.stem)
             objects[kind][item_id] = body
     return manifest, objects
@@ -863,7 +981,7 @@ def _report_source_failures(failures):
 def _plan(args):
     src = _client_from_args(args.src_url, args.src_ep, args.src_token, "AUTOPTIC_SRC_TOKEN")
     all_objects, source_failures = enumerate_all(src)
-    seed = select(all_objects, args.all, _selection_patterns(args))
+    seed, unmatched = select(all_objects, args.all, _selection_patterns(args))
     if args.no_deps:
         closure, warnings = seed, []
         required_secrets = required_secret_keys(seed.get("env", {}).values())
@@ -874,7 +992,13 @@ def _plan(args):
         hits = scan_literal_secrets(body)
         if hits:
             literal_secret_warnings.append(f"env '{env_id}' has literal-looking secret value(s), not templates, at: {', '.join(hits)}")
-    return closure, warnings + literal_secret_warnings, required_secrets, source_failures
+    # Sort the warnings. The server does not guarantee list order, so two
+    # consecutive runs against an unchanged instance were emitting the same
+    # warnings in a different order, which made the output impossible to diff
+    # against a previous run. Unmatched selectors stay first: they mean the
+    # command did not do what was asked, which outranks a pre-existing
+    # dangling ref on the source.
+    return closure, unmatched + sorted(warnings) + sorted(literal_secret_warnings), required_secrets, source_failures
 
 
 def cmd_plan(args):
@@ -929,7 +1053,18 @@ def _run_import(dst, objects, apply_, on_conflict, dst_ep):
 
 def cmd_import(args):
     manifest, objects = read_bundle(args.in_)
-    required_secrets = manifest.get("required_secrets", [])
+    # Recompute from the environment bodies actually in the bundle, and union
+    # with what the manifest recorded. read_bundle deliberately accepts a file
+    # that was added by hand after the export (that's why the id fallback in
+    # _bundle_item_id exists), but the manifest's list is frozen at export
+    # time -- so trusting it alone lets a hand-added env's secret keys through
+    # the preflight entirely unchecked. The union keeps the manifest's entries
+    # too, in case an env was removed from the bundle but its keys still
+    # matter to something else in it.
+    required_secrets = sorted(
+        set(manifest.get("required_secrets") or [])
+        | set(required_secret_keys(objects.get("env", {}).values()))
+    )
     dst = _client_from_args(args.dst_url, args.dst_ep, args.dst_token, "AUTOPTIC_DST_TOKEN")
     if not secrets_preflight(dst, required_secrets, args.assume_secrets_ready):
         return 1
@@ -1050,6 +1185,12 @@ def main():
         sys.exit(args.func(args) or 0)
     except ApiError as e:
         print(f"ERROR: {e}", file=sys.stderr)
+        sys.exit(1)
+    except BundleError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        sys.exit(1)
+    except KeyboardInterrupt:
+        print("\nInterrupted.", file=sys.stderr)
         sys.exit(1)
 
 
