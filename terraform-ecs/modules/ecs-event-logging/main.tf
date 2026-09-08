@@ -2,10 +2,10 @@
 # group via EventBridge, so the history outlives the task, the service, and `terraform destroy`.
 # `aws ecs describe-services` keeps only a short rolling window, held by the service itself.
 #
-# Every event pattern this module builds was checked with `aws events test-event-pattern` against
-# real ECS events from a live deployment (region, cluster, and service scope; a negative control
-# for service scope), not just AWS's documented examples. See ECS-DEPLOYMENT-LOGGING.md, section
-# "Point Autoptic at it" onward, for the source events.
+# Every event pattern this module builds was checked against real ECS events from a live
+# deployment, not just AWS's documented examples: region and cluster scope by real delivery on
+# two separate clusters, service scope by `aws events test-event-pattern` including a negative
+# control. See ECS-DEPLOYMENT-LOGGING.md for the source events and the full test history.
 
 data "aws_caller_identity" "current" {}
 data "aws_partition" "current" {}
@@ -22,12 +22,6 @@ locals {
 
   cluster_arns = var.scope == "cluster" ? [
     for c in coalesce(var.cluster_names, []) : "${local.ecs_arn_base}:cluster/${c}"
-  ] : []
-
-  # Trailing slash matters: without it the prefix also matches a cluster named
-  # "<name>-something-else" in the same account. Confirmed live with test-event-pattern.
-  cluster_service_prefixes = var.scope == "cluster" ? [
-    for c in coalesce(var.cluster_names, []) : { prefix = "${local.ecs_arn_base}:service/${c}/" }
   ] : []
 
   # "ECS Task State Change" carries no service ARN, only `detail.group`, formatted
@@ -107,50 +101,30 @@ resource "aws_cloudwatch_event_target" "region" {
   depends_on = [aws_cloudwatch_log_resource_policy.this]
 }
 
-# --- scope = "cluster": two rules, because ECS carries the cluster differently per event type ---
+# --- scope = "cluster": one rule. All three event types carry clusterArn in detail --
+# confirmed live, twice, on two different clusters, both by aws events test-event-pattern and by
+# real delivery. (An earlier version of this module used two rules here, on the belief that
+# ECS Deployment State Change carries no clusterArn -- that belief was wrong.)
 
-resource "aws_cloudwatch_event_rule" "cluster_deployments" {
+resource "aws_cloudwatch_event_rule" "cluster" {
   count = var.scope == "cluster" ? 1 : 0
 
-  name        = "${var.name_prefix}-ecs-deployments"
-  description = "ECS deployment state changes and service actions for the named clusters."
+  name        = "${var.name_prefix}-ecs-events"
+  description = "ECS deployment, service action, and task state change events for the named clusters."
 
   event_pattern = jsonencode({
     source        = ["aws.ecs"]
-    "detail-type" = ["ECS Deployment State Change", "ECS Service Action"]
-    resources     = local.cluster_service_prefixes
-  })
-}
-
-resource "aws_cloudwatch_event_rule" "cluster_tasks" {
-  count = var.scope == "cluster" ? 1 : 0
-
-  name        = "${var.name_prefix}-ecs-tasks"
-  description = "ECS task state changes for the named clusters."
-
-  event_pattern = jsonencode({
-    source        = ["aws.ecs"]
-    "detail-type" = ["ECS Task State Change"]
+    "detail-type" = ["ECS Deployment State Change", "ECS Service Action", "ECS Task State Change"]
     detail = {
       clusterArn = local.cluster_arns
     }
   })
 }
 
-resource "aws_cloudwatch_event_target" "cluster_deployments" {
+resource "aws_cloudwatch_event_target" "cluster" {
   count = var.scope == "cluster" ? 1 : 0
 
-  rule      = aws_cloudwatch_event_rule.cluster_deployments[0].name
-  target_id = "cloudwatch-logs"
-  arn       = local.log_group_arn
-
-  depends_on = [aws_cloudwatch_log_resource_policy.this]
-}
-
-resource "aws_cloudwatch_event_target" "cluster_tasks" {
-  count = var.scope == "cluster" ? 1 : 0
-
-  rule      = aws_cloudwatch_event_rule.cluster_tasks[0].name
+  rule      = aws_cloudwatch_event_rule.cluster[0].name
   target_id = "cloudwatch-logs"
   arn       = local.log_group_arn
 

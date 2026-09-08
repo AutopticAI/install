@@ -260,42 +260,32 @@ Whole region, all three event types. Confirmed live, against real events of all 
 }
 ```
 
-Scoped to one or more clusters, this needs **two** rules, because the event types do not carry
-the cluster the same way. `ECS Task State Change` carries `clusterArn` inside `detail`:
+Scoped to one or more clusters, **one rule** is enough. All three event types carry `clusterArn`
+in `detail` — confirmed live, twice, on two different clusters, both with
+`aws events test-event-pattern` and by real delivery through an applied rule:
 
 ```json
 {
   "source": ["aws.ecs"],
-  "detail-type": ["ECS Task State Change"],
+  "detail-type": [
+    "ECS Deployment State Change",
+    "ECS Service Action",
+    "ECS Task State Change"
+  ],
   "detail": { "clusterArn": ["arn:aws:ecs:<region>:<account>:cluster/<cluster>"] }
 }
 ```
 
-Deployment and service-action events are matched on the service ARN prefix in the top-level
-`resources` array instead. List more than one prefix to cover more than one cluster:
+List more than one `clusterArn` to cover more than one cluster with the same rule.
 
-```json
-{
-  "source": ["aws.ecs"],
-  "detail-type": ["ECS Deployment State Change", "ECS Service Action"],
-  "resources": [
-    { "prefix": "arn:aws:ecs:<region>:<account>:service/<cluster>/" }
-  ]
-}
-```
-
-The trailing slash matters. Without it, the prefix also matches a cluster named
-`<cluster>-something-else` in the same account.
-
-Point both rules at the same log group, so one query covers a whole deployment.
-
-**On the reason for two rules:** an earlier version of this doc stated that
-`ECS Deployment State Change` carries no `clusterArn` in `detail`, which is why the prefix match
-is used instead. That is not correct. A real `ECS Deployment State Change` event captured live
-during this pass does carry `clusterArn` in `detail`. The two-rule split is still the right
-design, because it lets one rule match on the service ARN prefix (covering deployment and service
-action events together) and the other match on `clusterArn` (the only field task events carry) —
-not because deployment events lack the field.
+**History, since this contradicts what an earlier version of this doc said twice:** the original
+doc claimed `ECS Deployment State Change` carries no `clusterArn`, and justified a two-rule split
+on that basis (one rule matching a service-ARN prefix, one matching `clusterArn`). A first
+correction, earlier in this same effort, kept the two-rule split but fixed the stated reason. A
+second, later test — applying the real Terraform module against a second live cluster, not just
+checking the pattern — confirmed `clusterArn` is present on every event type in practice, not an
+edge case, so the whole two-rule split was unnecessary for cluster scope. The module now builds
+one rule for this scope.
 
 Narrow to one or more specific services instead of a whole cluster by matching the exact service
 ARNs, with no prefix needed, and by matching task events on `detail.group`
@@ -420,13 +410,15 @@ terraform init && terraform apply
 | `log_group_arn` | For downstream IAM scoping, if you do not want `Resource: "*"`. |
 | `rule_names` | For verification and teardown. |
 
-**Scope note.** `scope = "region"` matches all `aws.ecs` events with a single rule and no ARN
-construction: prefer it unless you specifically need to narrow. `scope = "cluster"` and
-`scope = "service"` each create two rules, because ECS carries the cluster or the service
-differently across event types — task events carry `clusterArn` and `group` in `detail`;
-deployment and service-action events carry the service ARN in the top-level `resources` array.
-The module handles that split for you. All three scopes' event patterns are the same ones shown
-under Option B, and were confirmed live the same way.
+**Scope note.** `scope = "region"` and `scope = "cluster"` each build a single rule: every ECS
+event carries `clusterArn` in `detail`, confirmed live on two separate clusters, so cluster scope
+needs no split. `scope = "service"` still builds two rules, because ECS has no single field that
+identifies one service across all three event types — task events carry `group`
+(`"service:<name>"`) in `detail`; deployment and service-action events carry the service ARN in
+the top-level `resources` array instead. The module handles that split for you. All three scopes'
+event patterns are the same ones shown under Option B, and were confirmed live the same way —
+region and cluster scope by a real applied module against a real cluster, service scope by
+`aws events test-event-pattern` against real captured events.
 
 **Applying before the cluster exists.** An EventBridge rule matches only events that arrive after
 the rule exists. On a fresh environment, put the rules in place before the first deployment, or
@@ -594,7 +586,8 @@ write. You store two copies, and AWS bills for both.
 the same account and region as the cluster. To route events to a central bus in another account,
 you need a bus-to-bus forwarding rule. Talk to us: that setup is out of scope here.
 
-**Removing it.** Delete the two rules, targets first, then the log group. The resource policy is
+**Removing it.** Delete the rule or rules (one for region or cluster scope, two for service
+scope), targets first, then the log group. The resource policy is
 account-wide: leave it if anything else relies on it. Under Option D, `terraform destroy` removes
 all of it, including the log group and its history. Export anything you want to keep first.
 
