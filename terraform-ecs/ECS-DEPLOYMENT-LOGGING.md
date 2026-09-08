@@ -174,28 +174,41 @@ D), set `create_resource_policy = false` and add the grant to your existing poli
 
 ## Option A — AWS console, built-in (fastest)
 
-CloudWatch Container Insights has this built in. It creates the EventBridge rules and the log
-group for you.
+CloudWatch Container Insights has this built in. It creates the EventBridge rule and the log
+group for you. The console labels differ from an earlier AWS blog post about this feature;
+these steps are confirmed against the console as it exists today.
 
 1. Open the [CloudWatch console](https://console.aws.amazon.com/cloudwatch/).
-2. Choose **Insights → Container Insights**.
-3. Choose **View performance dashboards**.
-4. Choose **ECS Clusters**, **ECS Services**, or **ECS Tasks**.
-5. On a service or task, open the **Lifecycle events** tab, then choose **Configure lifecycle
-   events**.
-
-You need `events:PutRule`, `events:PutTargets`, and `logs:CreateLogGroup` to enable it, and
-`events:DescribeRule`, `events:ListTargetsByRule`, and `logs:DescribeLogGroups` to view it.
+2. Choose **Infrastructure Monitoring → Container Insights**.
+3. In the **Performance dashboard views** panel, on the left, choose **Clusters**, then pick
+   your cluster under **Filters**.
+4. Expand **More dashboard views**, near the bottom of that same left panel.
+5. Choose **Lifecycle events**, then choose **Configure lifecycle events**.
 
 **The trade-off:** you do not choose the log group name. It writes to
-`/aws/events/ecs/containerinsights/<clusterName>/performance`. If that violates a naming
-standard, or you want one group covering several clusters, use Option B.
+`/aws/events/ecs/containerinsights/<clusterName>/performance` — confirmed live, exactly as this
+doc guessed.
 
-**Not confirmed in this pass:** AWS's Container Insights lifecycle-events documentation lists
-what it captures as container instance state change, task state change, and service action
-events. It does not list `ECS Deployment State Change` by name. This session did not enable the
-feature on a live cluster to check, so treat Option A as covering task and service events with
-confidence, and deployment events as unconfirmed, until someone verifies it directly.
+**Confirmed live, in this pass, on a real deployment:** both `ECS Deployment State Change` and
+`ECS Task State Change` land in that log group. This overturns an earlier caution in this doc —
+AWS's Container Insights lifecycle-events documentation lists only container instance, task, and
+service-action events, not deployment events by name, but the real behavior includes them.
+
+**A real gap found in this pass, not previously documented:** the console does **not** attach
+the CloudWatch Logs resource policy for this log group. This contradicts an earlier version of
+this doc, which credited Option A (and Option B) with doing that automatically. Confirmed live:
+after choosing "Configure lifecycle events," the rule and the target were both created and
+correctly configured, but zero events arrived — the exact silent-failure mode described in
+[Troubleshooting](#troubleshooting). Adding the resource policy by hand (the same statement
+shown in [Option C](#option-c--aws-cli)'s step 2, with this log group's ARN) fixed it
+immediately; events landed within seconds of the next deployment. Do this check right after
+enabling Option A, every time:
+
+```bash
+aws logs describe-resource-policies --query "resourcePolicies[?policyName=='ecs-events-to-cwlogs']"
+```
+
+An empty result means you need to add the policy yourself, exactly as under Option C.
 
 Give Autoptic that log group name, and you are done. Skip to
 [Point Autoptic at it](#point-autoptic-at-it).
