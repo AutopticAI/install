@@ -49,8 +49,6 @@ services:
   server:
     image: autoptic/server:latest
     user: "1000:1000"
-    ports:
-      - "9999:9999"
     environment:
       - AWS_PROFILE=default
       - AWS_CONFIG_FILE=/home/appuser/.aws/config
@@ -110,8 +108,10 @@ services:
       server:
         condition: service_started
 
-  # Path-based reverse proxy in front of mcp and ui. Both are reached by
-  # service name on the default Compose network. Edit ./nginx/mcp.conf for
+  # Path-based reverse proxy in front of mcp, ui, and the server API. All are
+  # reached by service name on the default Compose network. The API has no
+  # published port: use /api/ on this proxy, for example
+  # http://<host>:6767/api/story/ep/default. Edit ./nginx/mcp.conf for
   # your own domain and port.
   nginx:
     image: nginx:1.27-alpine
