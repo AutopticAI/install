@@ -110,9 +110,9 @@ services:
 
   # Path-based reverse proxy in front of mcp, ui, and the server API. All are
   # reached by service name on the default Compose network. The API has no
-  # published port: use /api/ on this proxy, for example
-  # http://<host>:6767/api/story/ep/default. Edit ./nginx/mcp.conf for
-  # your own domain and port.
+  # published port: use /autoptic-api/ on this proxy, for example
+  # http://<host>:6767/autoptic-api/story/ep/default. The UI owns /api/.
+  # Edit ./nginx/mcp.conf for your own domain and port.
   nginx:
     image: nginx:1.27-alpine
     ports:
