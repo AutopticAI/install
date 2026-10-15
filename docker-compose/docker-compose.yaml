@@ -53,6 +53,12 @@ services:
       - AWS_PROFILE=default
       - AWS_CONFIG_FILE=/home/appuser/.aws/config
       - AWS_SHARED_CREDENTIALS_FILE=/home/appuser/.aws/credentials
+      # API token switches (RBAC). Empty: config.json decides, and there every switch is off.
+      # Set them in .env next to this file to keep them across restarts. See README.md.
+      - AUTH_BOOTSTRAP_SHA_ENABLE=${AUTH_BOOTSTRAP_SHA_ENABLE:-}
+      - AUTH_OBSERVE=${AUTH_OBSERVE:-}
+      - AUTH_ENFORCE=${AUTH_ENFORCE:-}
+      - AUTH_PERMISSIONS=${AUTH_PERMISSIONS:-}
     volumes:
       - ./config.json:/server/config.json:ro
       - aws_creds:/home/appuser/.aws:ro
@@ -64,9 +70,38 @@ services:
       init_credentials:
         condition: service_completed_successfully
 
+  # Mints the API tokens of the built-in roles and the machine principals, one time.
+  # It never replaces a token that has a value. It does not start with `docker compose up`:
+  #   docker compose --profile rbac run --rm rbac_mint
+  rbac_mint:
+    image: autoptic/server:latest
+    user: "1000:1000"
+    profiles: ["rbac"]
+    environment:
+      - AWS_PROFILE=default
+      - AWS_CONFIG_FILE=/home/appuser/.aws/config
+      - AWS_SHARED_CREDENTIALS_FILE=/home/appuser/.aws/credentials
+    volumes:
+      - ./config.json:/server/config.json:ro
+      - aws_creds:/home/appuser/.aws:ro
+      - pql_data:/home/appuser/pql:ro
+    command: ["setup", "--rbac", "/server/config.json"]
+    depends_on:
+      init_credentials:
+        condition: service_completed_successfully
+
   ui:
     image: autoptic/ui:latest
+    environment:
+      # The only API server that gets API tokens from the web app. The server URL that people
+      # set in the web app must be exactly this value.
+      - AUTOPTIC_SERVER_URL=${AUTOPTIC_SERVER_URL:-http://server:9999/}
+      # The web app sends the SHA-256 of this file to the bootstrap route to get its role tokens.
+      - AUTOPTIC_CONFIG_PATH=/app/autoptic/config.json
+      - AUTOPTIC_ROLE_MAPPING=${AUTOPTIC_ROLE_MAPPING:-}
     volumes:
+      # The same file as server and scheduler. The bootstrap hash covers the exact bytes.
+      - ./config.json:/app/autoptic/config.json:ro
       - ./ui:/app/backend/data
     depends_on:
       init_permissions:
@@ -100,10 +135,12 @@ services:
     environment:
       - AUTOPTIC_API_BASE_URL=http://server:9999/
       - SERVER_PORT=7000
-      - AUTOPTIC_API_TOKEN=
       - MCP_ADMIN_TOOLS_ENABLED=false
-      - MCP_SERVER_TOKEN=something
-      - MCP_SERVER_ID=local-demo
+      # The credential of this MCP server. Generate it (openssl rand -hex 32), and store the same
+      # value in the "default" secret dict as mcp.autoptic.service.<MCP_SERVER_ID>.
+      # Each MCP client sends its own named API token as Bearer, so the MCP server has no API token.
+      - MCP_SERVER_TOKEN=${MCP_SERVER_TOKEN:?set MCP_SERVER_TOKEN in .env, see README.md}
+      - MCP_SERVER_ID=${MCP_SERVER_ID:-local-demo}
     depends_on:
       server:
         condition: service_started

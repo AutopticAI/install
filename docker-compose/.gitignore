@@ -1,0 +1,4 @@
+# Local secrets: the MCP server credential, the RBAC switches, and the instance config.
+# Each person who can read config.json can get every role token.
+.env
+config.json
