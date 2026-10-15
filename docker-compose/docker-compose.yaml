@@ -1,3 +1,13 @@
+# Image tags. Set them in .env to pin a release, e.g. AUTOPTIC_SERVER_TAG=1.18.2. server,
+# scheduler and rbac_mint use the same server image tag, so they always run the same version.
+#
+# Ports. Only nginx (6767) is published on all interfaces. The other services are published on
+# 127.0.0.1 only, for checks from this host. Docker port publishing goes around firewalld and ufw,
+# so a port published on 0.0.0.0 is open to the network even when the firewall blocks it.
+#
+# Restart. Every long-running service has `restart: unless-stopped`, so the stack comes back after
+# a host reboot or a Docker daemon restart.
+
 services:
   # Runs once as root, before any app container starts. It creates and owns
   # ./ui, ./metrics, and ./logs as uid:gid 1000:1000, the fixed non-root user
@@ -29,6 +39,10 @@ services:
   # hands a uid-1000-owned copy to the app containers. It reruns on every
   # `docker compose up`/restart, so a rotated AWS credential on the host is
   # picked up on the next restart, not live while containers keep running.
+  # The volumes are emptied first, so a file removed from the host is also
+  # removed from the copy.
+  # ~/.aws and ~/pql must exist: `create_host_path: false` makes Compose stop
+  # with an error instead of creating a root-owned empty directory.
   init_credentials:
     image: busybox:1.36.1
     user: "0:0"
@@ -37,22 +51,39 @@ services:
       - -c
       - |
         mkdir -p /data/aws /data/pql
+        find /data/aws /data/pql -mindepth 1 -delete
         cp -a /host-aws/. /data/aws/
         cp -a /host-pql/. /data/pql/
         chown -R 1000:1000 /data/aws /data/pql
     volumes:
-      - ~/.aws:/host-aws:ro
-      - ~/pql:/host-pql:ro
+      - type: bind
+        source: ~/.aws
+        target: /host-aws
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ~/pql
+        target: /host-pql
+        read_only: true
+        bind:
+          create_host_path: false
       - aws_creds:/data/aws
       - pql_data:/data/pql
 
   server:
-    image: autoptic/server:latest
+    image: autoptic/server:${AUTOPTIC_SERVER_TAG:-latest}
     user: "1000:1000"
+    restart: unless-stopped
     environment:
       - AWS_PROFILE=default
       - AWS_CONFIG_FILE=/home/appuser/.aws/config
       - AWS_SHARED_CREDENTIALS_FILE=/home/appuser/.aws/credentials
+      # Service names on the Compose network. These override the localhost addresses that
+      # `setup --prepare` writes into config.json, without a change to the file.
+      - AUTOPTIC_UI_ADDRESS=http://ui:8080
+      - AUTOPTIC_VECTOR_EMBED_URL=http://vectors:8000
+      - AUTOPTIC_VECTOR_QDRANT_HOST=metrics
       # API token switches (RBAC). Empty: config.json decides, and there every switch is off.
       # Set them in .env next to this file to keep them across restarts. See README.md.
       - AUTH_BOOTSTRAP_SHA_ENABLE=${AUTH_BOOTSTRAP_SHA_ENABLE:-}
@@ -60,21 +91,36 @@ services:
       - AUTH_ENFORCE=${AUTH_ENFORCE:-}
       - AUTH_PERMISSIONS=${AUTH_PERMISSIONS:-}
     volumes:
-      - ./config.json:/server/config.json:ro
+      - type: bind
+        source: ./config.json
+        target: /server/config.json
+        read_only: true
+        bind:
+          create_host_path: false
       - aws_creds:/home/appuser/.aws:ro
       - pql_data:/home/appuser/pql:ro
     command: ["api", "-config", "/server/config.json"]
+    healthcheck:
+      test: ["CMD", "curl", "--silent", "--fail", "http://localhost:9999/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 30s
     depends_on:
       init_permissions:
         condition: service_completed_successfully
       init_credentials:
         condition: service_completed_successfully
+      metrics:
+        condition: service_started
+      vectors:
+        condition: service_started
 
   # Mints the API tokens of the built-in roles and the machine principals, one time.
   # It never replaces a token that has a value. It does not start with `docker compose up`:
   #   docker compose --profile rbac run --rm rbac_mint
   rbac_mint:
-    image: autoptic/server:latest
+    image: autoptic/server:${AUTOPTIC_SERVER_TAG:-latest}
     user: "1000:1000"
     profiles: ["rbac"]
     environment:
@@ -82,7 +128,12 @@ services:
       - AWS_CONFIG_FILE=/home/appuser/.aws/config
       - AWS_SHARED_CREDENTIALS_FILE=/home/appuser/.aws/credentials
     volumes:
-      - ./config.json:/server/config.json:ro
+      - type: bind
+        source: ./config.json
+        target: /server/config.json
+        read_only: true
+        bind:
+          create_host_path: false
       - aws_creds:/home/appuser/.aws:ro
       - pql_data:/home/appuser/pql:ro
     command: ["setup", "--rbac", "/server/config.json"]
@@ -91,7 +142,8 @@ services:
         condition: service_completed_successfully
 
   ui:
-    image: autoptic/ui:latest
+    image: autoptic/ui:${AUTOPTIC_UI_TAG:-latest}
+    restart: unless-stopped
     environment:
       # The only API server that gets API tokens from the web app. The server URL that people
       # set in the web app must be exactly this value.
@@ -101,37 +153,52 @@ services:
       - AUTOPTIC_ROLE_MAPPING=${AUTOPTIC_ROLE_MAPPING:-}
     volumes:
       # The same file as server and scheduler. The bootstrap hash covers the exact bytes.
-      - ./config.json:/app/autoptic/config.json:ro
+      - type: bind
+        source: ./config.json
+        target: /app/autoptic/config.json
+        read_only: true
+        bind:
+          create_host_path: false
       - ./ui:/app/backend/data
     depends_on:
       init_permissions:
         condition: service_completed_successfully
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
 
   scheduler:
-    image: autoptic/server:latest
+    image: autoptic/server:${AUTOPTIC_SERVER_TAG:-latest}
     user: "1000:1000"
-    network_mode: service:server
+    restart: unless-stopped
     environment:
       - AWS_PROFILE=default
       - AWS_CONFIG_FILE=/home/appuser/.aws/config
       - AWS_SHARED_CREDENTIALS_FILE=/home/appuser/.aws/credentials
+      # The scheduler is on the Compose network, so it reaches the API server by service name.
+      # This overrides scheduler.api_endpoint in config.json (often http://localhost:9999/...)
+      # without a change to the file, so the bootstrap hash stays the same.
+      - AUTOPTIC_API_ENDPOINT=http://server:9999/story/ep/default
     volumes:
-      - ./config.json:/server/config.json:ro
+      - type: bind
+        source: ./config.json
+        target: /server/config.json
+        read_only: true
+        bind:
+          create_host_path: false
       - aws_creds:/home/appuser/.aws:ro
       - pql_data:/home/appuser/pql:ro
     command: ["scheduler", "-config", "/server/config.json"]
     depends_on:
       server:
-        condition: service_started
+        condition: service_healthy
       init_credentials:
         condition: service_completed_successfully
 
   mcp:
-    image: autoptic/mcp:latest
+    image: autoptic/mcp:${AUTOPTIC_MCP_TAG:-latest}
+    restart: unless-stopped
     ports:
-      - "7000:7000"
+      - "127.0.0.1:7000:7000"
     environment:
       - AUTOPTIC_API_BASE_URL=http://server:9999/
       - SERVER_PORT=7000
@@ -141,9 +208,15 @@ services:
       # Each MCP client sends its own named API token as Bearer, so the MCP server has no API token.
       - MCP_SERVER_TOKEN=${MCP_SERVER_TOKEN:?set MCP_SERVER_TOKEN in .env, see README.md}
       - MCP_SERVER_ID=${MCP_SERVER_ID:-local-demo}
+    healthcheck:
+      test: ["CMD", "curl", "--silent", "--fail", "http://localhost:7000/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
     depends_on:
       server:
-        condition: service_started
+        condition: service_healthy
 
   # Path-based reverse proxy in front of mcp, ui, and the server API. All are
   # reached by service name on the default Compose network. The API has no
@@ -152,22 +225,29 @@ services:
   # Edit ./nginx/mcp.conf for your own domain and port.
   nginx:
     image: nginx:1.27-alpine
+    restart: unless-stopped
     ports:
       - "6767:6767"
     volumes:
-      - ./nginx/mcp.conf:/etc/nginx/conf.d/default.conf:ro
+      - type: bind
+        source: ./nginx/mcp.conf
+        target: /etc/nginx/conf.d/default.conf
+        read_only: true
+        bind:
+          create_host_path: false
     depends_on:
       mcp:
         condition: service_started
       ui:
         condition: service_started
-    restart: unless-stopped
 
+  # Qdrant. It has no authentication, so its ports are published on 127.0.0.1 only.
   metrics:
-    image: autoptic/metrics:latest
+    image: autoptic/metrics:${AUTOPTIC_METRICS_TAG:-latest}
+    restart: unless-stopped
     ports:
-      - "6333:6333"
-      - "6334:6334"
+      - "127.0.0.1:6333:6333"
+      - "127.0.0.1:6334:6334"
     volumes:
       - ./metrics:/qdrant/storage
     depends_on:
@@ -175,9 +255,17 @@ services:
         condition: service_completed_successfully
 
   vectors:
-    image: autoptic/vectors:latest
+    image: autoptic/vectors:${AUTOPTIC_VECTORS_TAG:-latest}
+    restart: unless-stopped
+    environment:
+      # Qdrant on the Compose network. The image default is http://localhost:6333, which is the
+      # vectors container itself, so /health answers 503 "Qdrant unreachable".
+      - QDRANT_URL=http://metrics:6333
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      metrics:
+        condition: service_started
 
   # Optional: Local model service for GPU-accelerated inference
   # Requires NVIDIA GPU with Docker GPU support
