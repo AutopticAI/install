@@ -195,3 +195,29 @@ needs two things together: `server` must be in the Service Connect mesh (`ecs.tf
 `server.service_connect_configuration`, already set in this template), and `config.json`'s
 `vector.qdrant_host` must be the bare name `metrics`, not an FQDN (see "Service Connect names are
 bare, never FQDNs" above) — check both if this still fails.
+
+## Manual agent runs fail at 60s with `504 Gateway Time-out`
+
+**When:** running an agent from the UI fails after about 60 seconds with `Failed to run brief:
+<html>...504 Gateway Time-out...`. Shorter runs work.
+
+**Why:** a manual run holds one HTTP request open until the run finishes, and it passes through two
+ALBs: the public ALB (browser → `ui`) and the internal-server ALB (`ui` → `server`). An ALB closes
+a request that has sent no data for its idle timeout, which AWS sets to 60s by default. The 504 page
+comes from the internal-server ALB; `ui` passes it on inside its own error. Raising only the public
+ALB isn't enough.
+
+**Fix:** this template sets `idle_timeout = var.alb_idle_timeout` (default 300) on the public,
+internal-server and internal-mcp ALBs. On an install made before that, raise all three by hand
+without re-applying:
+
+```bash
+for lb in <app>-<env>-public <app>-<env>-int-server <app>-<env>-int-mcp; do
+  arn=$(aws elbv2 describe-load-balancers --names "$lb" --query 'LoadBalancers[0].LoadBalancerArn' --output text)
+  aws elbv2 modify-load-balancer-attributes --load-balancer-arn "$arn" \
+    --attributes Key=idle_timeout.timeout_seconds,Value=300
+done
+```
+
+The change takes effect at once, with no restart. A later `terraform apply` of an older copy of
+this template puts the 60s default back.

@@ -178,3 +178,16 @@ variable "ecs_event_log_retention_days" {
   type        = number
   default     = 90
 }
+
+# --- Load balancers (alb.tf) ---
+
+variable "alb_idle_timeout" {
+  description = <<-EOT
+    Idle timeout in seconds for the public, internal-server and internal-mcp ALBs. A manual agent
+    run holds one request open until the run finishes, through both the public ALB (browser -> ui)
+    and the internal-server ALB (ui -> server). The AWS default of 60s cuts longer runs off with a
+    504, so this has to be at least the longest run on every ALB in that path.
+  EOT
+  type        = number
+  default     = 300
+}

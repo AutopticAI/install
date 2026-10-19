@@ -9,6 +9,7 @@ resource "aws_lb" "public" {
   name               = "${local.name_prefix}-public"
   internal           = false
   load_balancer_type = "application"
+  idle_timeout       = var.alb_idle_timeout
   subnets            = module.vpc.public_subnets
   security_groups    = [module.sg_alb_public.id]
 
@@ -46,6 +47,7 @@ resource "aws_lb" "internal_server" {
   name               = "${local.name_prefix}-int-server"
   internal           = true
   load_balancer_type = "application"
+  idle_timeout       = var.alb_idle_timeout
   subnets            = module.vpc.private_subnets
   security_groups    = [module.sg_alb["server"].id]
 
@@ -119,6 +121,7 @@ resource "aws_lb" "internal_mcp" {
   name               = "${local.name_prefix}-int-mcp"
   internal           = true
   load_balancer_type = "application"
+  idle_timeout       = var.alb_idle_timeout
   subnets            = module.vpc.private_subnets
   security_groups    = [module.sg_alb["mcp"].id]
 
