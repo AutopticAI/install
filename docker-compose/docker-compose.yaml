@@ -24,10 +24,18 @@ services:
       - |
         mkdir -p /data/ui /data/metrics /data/logs
         chown -R 1000:1000 /data/ui /data/metrics /data/logs
+        # Each person who can read config.json can get every role token through bootstrap.
+        chown 1000:1000 /data/config.json
+        chmod 600 /data/config.json
     volumes:
       - ./ui:/data/ui
       - ./metrics:/data/metrics
       - ./logs:/data/logs
+      - type: bind
+        source: ./config.json
+        target: /data/config.json
+        bind:
+          create_host_path: false
 
   # Copies ~/.aws and ~/pql from the host into two Docker-managed volumes
   # owned by uid:gid 1000:1000, the fixed user server/scheduler run as. A
@@ -84,12 +92,16 @@ services:
       - AUTOPTIC_UI_ADDRESS=http://ui:8080
       - AUTOPTIC_VECTOR_EMBED_URL=http://vectors:8000
       - AUTOPTIC_VECTOR_QDRANT_HOST=metrics
-      # API token switches (RBAC). Empty: config.json decides, and there every switch is off.
-      # Set them in .env next to this file to keep them across restarts. See README.md.
-      - AUTH_BOOTSTRAP_SHA_ENABLE=${AUTH_BOOTSTRAP_SHA_ENABLE:-}
-      - AUTH_OBSERVE=${AUTH_OBSERVE:-}
-      - AUTH_ENFORCE=${AUTH_ENFORCE:-}
-      - AUTH_PERMISSIONS=${AUTH_PERMISSIONS:-}
+      # Access control is on by default. To turn a switch off, set it to false in .env next to
+      # this file. See README.md.
+      - AUTH_BOOTSTRAP_SHA_ENABLE=${AUTH_BOOTSTRAP_SHA_ENABLE:-true}
+      - AUTH_OBSERVE=${AUTH_OBSERVE:-false}
+      - AUTH_ENFORCE=${AUTH_ENFORCE:-true}
+      - AUTH_PERMISSIONS=${AUTH_PERMISSIONS:-true}
+      # The API trusts X-Forwarded-For from these ranges. The API has no published port, so every
+      # caller is a container on the Compose network (nginx for outside traffic), and Docker gives
+      # that network an address in one of the private ranges.
+      - AUTH_TRUSTED_PROXIES=${AUTH_TRUSTED_PROXIES:-10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
     volumes:
       - type: bind
         source: ./config.json
@@ -111,22 +123,29 @@ services:
         condition: service_completed_successfully
       init_credentials:
         condition: service_completed_successfully
+      # The tokens exist before the API starts, so enforce never has an open window.
+      rbac_mint:
+        condition: service_completed_successfully
       metrics:
         condition: service_started
       vectors:
         condition: service_started
 
-  # Mints the API tokens of the built-in roles and the machine principals, one time.
-  # It never replaces a token that has a value. It does not start with `docker compose up`:
-  #   docker compose --profile rbac run --rm rbac_mint
+  # Runs before the API starts. It mints the API tokens of the built-in roles and the machine
+  # principals. It never replaces a value that exists. It logs the ids only. README.md shows how
+  # to get the role.admin token and how to add the MCP keys.
   rbac_mint:
     image: autoptic/server:${AUTOPTIC_SERVER_TAG:-latest}
     user: "1000:1000"
-    profiles: ["rbac"]
+    restart: "no"
     environment:
       - AWS_PROFILE=default
       - AWS_CONFIG_FILE=/home/appuser/.aws/config
       - AWS_SHARED_CREDENTIALS_FILE=/home/appuser/.aws/credentials
+      # MCP_SERVER_ID and MCP_SERVER_TOKEN are for a planned setup --rbac step that registers
+      # mcp.autoptic.service.<MCP_SERVER_ID>. Released servers ignore both.
+      - MCP_SERVER_ID=${MCP_SERVER_ID:-local-demo}
+      - MCP_SERVER_TOKEN=${MCP_SERVER_TOKEN:?set MCP_SERVER_TOKEN in .env, see README.md}
     volumes:
       - type: bind
         source: ./config.json
@@ -138,6 +157,8 @@ services:
       - pql_data:/home/appuser/pql:ro
     command: ["setup", "--rbac", "/server/config.json"]
     depends_on:
+      init_permissions:
+        condition: service_completed_successfully
       init_credentials:
         condition: service_completed_successfully
 
@@ -195,7 +216,7 @@ services:
         condition: service_completed_successfully
 
   mcp:
-    image: autoptic/mcp:${AUTOPTIC_MCP_TAG:-latest}
+    image: autoptic/mcp:${AUTOPTIC_MCP_TAG:-1.10.0}
     restart: unless-stopped
     ports:
       - "127.0.0.1:7000:7000"

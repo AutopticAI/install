@@ -8,11 +8,14 @@ A single-host install of Autoptic with plain Docker Compose. It runs `server`, `
 - Docker and Docker Compose.
 - AWS credentials at `~/.aws` on the host, with a profile named `default`.
 - A `~/pql` directory on the host. `server` and `scheduler` read it.
+- The AWS resources of the instance (DynamoDB tables and S3 bucket). Create them by hand, as the docs
+  page "Installation" shows in "Step 5: Run Initial Setup" (`setup --run`). If they are missing,
+  `rbac_mint` stops with an error and the API does not start.
 
 `~/.aws`, `~/pql`, `config.json` and `nginx/mcp.conf` must exist before you start. If one is
 missing, Compose stops with an error. It does not create an empty directory in its place.
-- Your own `config.json` in this directory. Autoptic gives you this file as part of your setup;
-  it is not included here.
+- Your own `config.json` in this directory. Autoptic gives you this file as part of your setup.
+  This directory does not include it.
 
 
 
@@ -56,42 +59,73 @@ Each image tag comes from `.env`. The default is `latest`. To pin a release, set
 |---|---|
 | `AUTOPTIC_SERVER_TAG` | `server`, `scheduler` and `rbac_mint`. One tag, so the three always run the same version. |
 | `AUTOPTIC_UI_TAG` | `ui` |
-| `AUTOPTIC_MCP_TAG` | `mcp` |
+| `AUTOPTIC_MCP_TAG` | `mcp`. The default is `1.10.0`. Use `1.10.0` or later. |
 | `AUTOPTIC_METRICS_TAG` | `metrics` |
 | `AUTOPTIC_VECTORS_TAG` | `vectors` |
 
 ## API tokens (RBAC)
 
-With the default settings, the API server accepts calls without a token. Do these steps in this
-order to turn on API tokens. Do each step only after the previous step works.
+Access control is on by default. `AUTH_ENFORCE`, `AUTH_PERMISSIONS` and `AUTH_BOOTSTRAP_SHA_ENABLE`
+are `true`. The first `docker compose up -d` does this before the API starts:
 
-1. Protect `config.json`. Each person who can read it can get every role token.
+1. `init_permissions` sets `config.json` to owner `1000:1000` and mode `600`.
+2. `rbac_mint` mints the role and machine tokens. It logs their ids only, not the values.
 
-   ```bash
-   sudo chown 1000:1000 config.json && chmod 600 config.json
-   ```
+After the first start, `config.json` belongs to uid `1000`. To edit it, use `sudo`.
 
-2. Mint the tokens. The output shows `RBAC MINT SUMMARY` with the minted ids.
+**Get the `role.admin` token**
 
-   ```bash
-   docker compose --profile rbac run --rm rbac_mint
-   ```
+The bootstrap route gives the `role.admin` token to a caller that sends the SHA-256 of `config.json`.
+Run these commands on the host, next to `docker-compose.yaml`:
 
-3. Store two keys in the `"default"` secret dict through the Secret API. Do this before step 6,
-   because after step 6 the Secret API accepts only an admin token.
-   - `mcp.autoptic.service.<MCP_SERVER_ID>` (default `mcp.autoptic.service.local-demo`): the value
-     of `MCP_SERVER_TOKEN`.
-   - `mcp.autoptic.server`: a new random value. Each MCP client sends it as `X-MCP-Token`.
-4. Add `AUTH_BOOTSTRAP_SHA_ENABLE=true` to `.env`, then run `docker compose up -d server`. Make sure
-   that the `scheduler` log shows `using API token fetched via bootstrap`. While bootstrap is off, the
-   scheduler asks only every 5 minutes. To make it ask at once, run `docker compose restart scheduler`.
-5. In the web app, create a named token for each MCP user: Tokens, New principal, Person.
-6. Add `AUTH_ENFORCE=true` and `AUTH_PERMISSIONS=true` to `.env`, then run `docker compose up -d server`.
-7. Rotate every token, `role.admin` first:
+```bash
+SHA=$(sudo sha256sum config.json | cut -d' ' -f1)
+curl -s -X POST http://127.0.0.1:6767/autoptic-api/story/ep/default/auth/bootstrap/credential \
+  -H 'Content-Type: application/json' \
+  -d "{\"bootstrap_sha\":\"$SHA\",\"principal_id\":\"role.admin\"}"
+```
+
+The answer is `{"principal_id":"role.admin","token":"<token>"}`. Keep each copy of `config.json` as
+safe as this token, because its SHA-256 is the proof for bootstrap.
+
+**MCP keys for mcp 1.10**
+
+Released servers do not register the MCP keys. Add both in the web app, under Utils, Secrets, in the
+`default` secret dict:
+
+| Key | Value |
+|---|---|
+| `mcp.autoptic.service.<MCP_SERVER_ID>` | The value of `MCP_SERVER_TOKEN` in `.env` |
+| `mcp.autoptic.server` | A new random value, for example from `openssl rand -hex 32`. MCP clients send it as `X-MCP-Token`. |
+
+Then create a named token for each person in the web app: Tokens, New principal, Person.
+
+To opt out, set `AUTH_ENFORCE=false` and `AUTH_PERMISSIONS=false` in `.env`, then run
+`docker compose up -d server`. With enforce off, the token and secret APIs answer callers with no token.
+
+**Upgrade of an existing install**
+
+An upgrade is `docker compose pull`, `docker compose down`, then `docker compose up -d`, with a short
+downtime. A new install needs no rotation. An install that ran with enforce off must do these steps in
+order. Do each step only after the previous step works.
+
+CAUTION: Do step 1 before the first `docker compose up` with this version of the file. Otherwise the
+API enforces tokens at once, and MCP and REST clients without a named token stop working.
+
+1. Add `AUTH_ENFORCE=false`, `AUTH_PERMISSIONS=false` and `AUTH_BOOTSTRAP_SHA_ENABLE=false` to `.env`.
+2. Upgrade: `docker compose pull`, `docker compose down`, `docker compose up -d`. `rbac_mint` mints the
+   tokens. Add the MCP keys as "MCP keys for mcp 1.10" shows.
+3. Set `AUTH_BOOTSTRAP_SHA_ENABLE=true` in `.env`, then run `docker compose up -d`. Make sure that the
+   `scheduler` log shows `using API token fetched via bootstrap`. To make it ask at once, run
+   `docker compose restart scheduler`.
+4. Create a named token for each MCP user in the web app.
+5. Remove `AUTH_ENFORCE` and `AUTH_PERMISSIONS` from `.env`, then run `docker compose up -d`.
+6. Rotate every token, `role.admin` first:
    `POST /autoptic-api/story/ep/default/token/role.admin/credential`. Keep the new value, then rotate
-   the other tokens with it. In steps 2 to 6 the Secret API accepted calls without a token.
+   the other tokens with it. Before step 5, the Secret API accepted calls without a token.
 
-To turn a switch off, remove it from `.env` and run `docker compose up -d server`. The tokens stay.
+`docker compose up -d` recreates only the services whose settings changed. A full `down` and `up` also
+works, with a short downtime.
 
 **Rules**
 
@@ -104,10 +138,10 @@ To turn a switch off, remove it from `.env` and run `docker compose up -d server
 - The web app sends API tokens only to `AUTOPTIC_SERVER_URL` (default `http://server:9999/`). The
   server URL that people set in the web app must be exactly this value.
 - An MCP client sends three headers to `http://<host>:6767/mcp`: `Authorization: Bearer <named
-  token>`, `X-MCP-Token: <mcp.autoptic.server value>`, and `X-MCP-Endpoint: default`.
-- The API server sees the nginx address for each caller. Add the range of the Compose network to
-  `auth.trusted_proxies` in `config.json`. Without it, one caller with bad tokens can cause `429`
-  for every caller behind nginx.
+  token>`, `X-MCP-Token: <mcp.autoptic.server value>`, and `X-MCP-Endpoint: default`. The docs page "Connect to Autoptic MCP and API" gives users the steps.
+- The API server sees the nginx address for each caller. `AUTH_TRUSTED_PROXIES` (default: the private
+  ranges, which hold the Compose network) makes it use the client address from `X-Forwarded-For`.
+  Without it, one caller with bad tokens can cause `429` for every caller behind nginx.
 
 ## Edit before you go to production
 
