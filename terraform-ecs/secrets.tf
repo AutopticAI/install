@@ -1,10 +1,9 @@
 # MCP_SERVER_TOKEN is NOT the bearer token MCP clients send (that's X-MCP-Token, a per-endpoint
 # secret verified live against the Autoptic API on every tool call -- it never lives here). This
 # is mcp's own outbound service credential, presented to the Autoptic API as x-api-token on every
-# verify call, alongside MCP_SERVER_ID as X-MCP-Server-Id. It must match a real
-# mcp.autoptic.service.<MCP_SERVER_ID> secret already stored server-side -- the random_password
-# fallback below produces a syntactically valid but functionally useless value unless
-# var.mcp_server_token is set to that real, pre-shared credential. Delivered via the task
+# verify call, alongside MCP_SERVER_ID as X-MCP-Server-Id. Released servers do not register this
+# value. Add it as mcp.autoptic.service.<MCP_SERVER_ID> in the default secret dict (README.md,
+# "Access control"), also when random_password below makes it. Delivered via the task
 # definition's `secrets` block (ecs.tf), never as a plain environment variable.
 resource "random_password" "mcp_server_token" {
   count   = var.mcp_server_token == "" ? 1 : 0

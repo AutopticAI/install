@@ -70,7 +70,7 @@ variable "vectors_image" {
 variable "mcp_image" {
   description = "Docker image for the mcp service."
   type        = string
-  default     = "autoptic/mcp:latest"
+  default     = "autoptic/mcp:1.10.0"
 }
 
 # --- Sizing (Fargate cpu/memory units) ---
@@ -142,13 +142,13 @@ variable "mcp_admin_tools_enabled" {
 }
 
 variable "mcp_server_id" {
-  description = "Required for the streamable_http transport. Must match a key suffix in the external token registry that mcp's outbound token is checked against."
+  description = "Required for the streamable_http transport. A lowercase slug. With mcp 1.10, the default secret dict needs mcp.autoptic.service.<mcp_server_id> with the value of mcp_server_token (README.md, \"Access control\")."
   type        = string
   default     = "local-demo"
 }
 
 variable "mcp_server_token" {
-  description = "mcp's own outbound service credential to the Autoptic API (x-api-token), NOT the X-MCP-Token clients send. Must match a real mcp.autoptic.service.<mcp_server_id> secret already stored server-side -- leaving this empty auto-generates a random value that will not match anything and silently breaks mcp's outbound auth."
+  description = "mcp's own outbound service credential to the Autoptic API (x-api-token), NOT the X-MCP-Token clients send. Leave it empty to auto-generate one. Released servers do not register it: add it as mcp.autoptic.service.<mcp_server_id> in the default secret dict (README.md, \"Access control\"). Use mcp 1.10.0 or later."
   type        = string
   default     = ""
   sensitive   = true
@@ -177,4 +177,61 @@ variable "ecs_event_log_retention_days" {
   EOT
   type        = number
   default     = 90
+}
+
+# --- Access control ---
+
+variable "auth_enforce" {
+  description = "Every API call needs a token. Set false only to opt out. With enforce off, the token and secret APIs answer callers with no token."
+  type        = bool
+  default     = true
+}
+
+variable "auth_observe" {
+  description = "Log the auth decision for each call, and refuse no call. Use it to test the tokens before you turn on auth_enforce."
+  type        = bool
+  default     = false
+}
+
+variable "auth_permissions" {
+  description = "Limit each token to its scopes. Needs auth_enforce."
+  type        = bool
+  default     = true
+
+  validation {
+    condition     = !var.auth_permissions || var.auth_enforce
+    error_message = "auth_permissions = true requires auth_enforce = true."
+  }
+}
+
+variable "auth_bootstrap_sha_enable" {
+  description = "The scheduler and the web app fetch their own tokens with the SHA-256 of config.json."
+  type        = bool
+  default     = true
+}
+
+variable "auth_trusted_proxies" {
+  description = "CIDR ranges of the proxies whose X-Forwarded-For header the API trusts. Empty means the VPC range (vpc_cidr), where the load balancers run. Server releases up to 1.217.4 do not read AUTH_TRUSTED_PROXIES: also set auth.trusted_proxies in config.json."
+  type        = list(string)
+  default     = []
+}
+
+variable "ui_role_mapping" {
+  description = "Web-app role to API principal mapping, for example \"user=role.operator\". Empty uses the web-app default (admin=role.admin, user=role.viewer)."
+  type        = string
+  default     = ""
+}
+
+# --- Load balancers (alb.tf) ---
+
+variable "alb_idle_timeout" {
+  description = <<-EOT
+    Idle timeout in seconds for the public and internal-server ALBs. A manual agent run holds one
+    request open until the run finishes, through both the public ALB (browser -> ui) and the
+    internal-server ALB (ui -> server). An MCP stream on /mcp also stays open with no data for
+    long periods. The AWS default of 60s cuts these off with a 504, so this has to be at least the
+    longest run on every ALB in that path.
+  EOT
+  type        = number
+  default     = 300
 }

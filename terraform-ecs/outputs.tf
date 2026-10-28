@@ -1,6 +1,16 @@
 output "public_alb_dns_name" {
-  description = "How to reach ui from outside the VPC."
+  description = "How to reach the stack from outside the VPC: ui at /, the API at /autoptic-api/, mcp at /mcp."
   value       = aws_lb.public.dns_name
+}
+
+output "api_url" {
+  description = "The API through the public ALB, over HTTP. After DNS-TLS-SETUP.md, use https://<domain>/autoptic-api/. Null when auth_enforce is off, because the API then stays internal."
+  value       = local.public_api_enabled ? "http://${aws_lb.public.dns_name}/autoptic-api/" : null
+}
+
+output "mcp_url" {
+  description = "The MCP endpoint for MCP clients, through the public ALB, over HTTP. After DNS-TLS-SETUP.md, use https://<domain>/mcp."
+  value       = "http://${aws_lb.public.dns_name}/mcp"
 }
 
 output "internal_server_alb_dns_name" {
@@ -9,10 +19,6 @@ output "internal_server_alb_dns_name" {
 
 output "internal_vectors_alb_dns_name" {
   value = aws_lb.internal_vectors.dns_name
-}
-
-output "internal_mcp_alb_dns_name" {
-  value = aws_lb.internal_mcp.dns_name
 }
 
 output "ecs_cluster_name" {

@@ -96,7 +96,9 @@ config error: MCP_SERVER_ID is required for streamable_http transport
 
 Straightforward missing environment variable, not present in the Copilot ECS docs this design
 was ported from (`mcp` didn't exist there at all). Set it via `var.mcp_server_id`
-(`<MCP_SERVER_ID>` — must match a key suffix in your external token registry).
+(`<MCP_SERVER_ID>`, a lowercase slug). The default secret dict then needs
+`mcp.autoptic.service.<MCP_SERVER_ID>` with the value of `mcp_server_token`. Released servers do
+not add it, see "Access control" in `README.md`.
 
 ## `ui` crashes on boot: `Required environment variable not found`
 
@@ -156,6 +158,21 @@ REST port (6333) is a different port than the one `server` uses (6334, gRPC, via
    `http://metrics.<ENV_NAME>.<APP_NAME>.local:6333` — the FQDN form — and it still failed.**
    See the next section; this is the same root cause as the `404`-vs-DNS confusion.
 
+**A third cause, with the settings above correct:** `vectors` deployed before `metrics` existed.
+Service Connect gives a task only the endpoints that existed when the current deployment of its
+service started. A replacement task of the same deployment keeps that list, so the `503` stays.
+The `metrics` log then shows no request at all.
+
+This template creates `metrics` in its own module call (`module "metrics"` in `ecs.tf`), and
+`vectors` and `server` deploy after it. On an install made before that, force a new deployment:
+
+```bash
+for svc in vectors server; do
+  aws ecs update-service --cluster <app>-<env> --service "$svc" --force-new-deployment \
+    --query 'service.serviceName'
+done
+```
+
 ## Service Connect names are bare, never FQDNs
 
 **When:** `QDRANT_URL` (or any similar internal URL) is set to
@@ -195,3 +212,42 @@ needs two things together: `server` must be in the Service Connect mesh (`ecs.tf
 `server.service_connect_configuration`, already set in this template), and `config.json`'s
 `vector.qdrant_host` must be the bare name `metrics`, not an FQDN (see "Service Connect names are
 bare, never FQDNs" above) — check both if this still fails.
+
+## Manual agent runs or MCP streams stop at 60s with `504 Gateway Time-out`
+
+**When:** an agent run from the UI fails after about 60 seconds with `Failed to run brief:
+<html>...504 Gateway Time-out...`. Shorter runs work. An MCP client on `/mcp` can lose its stream
+after the same time.
+
+**Why:** a manual run holds one HTTP request open until the run finishes. This request goes
+through two ALBs: the public ALB (browser → `ui`) and the internal-server ALB (`ui` → `server`).
+An ALB closes a request that sends no data for its idle timeout. AWS sets this timeout to 60s by
+default. The 504 page comes from the internal-server ALB, and `ui` passes it on inside its own
+error. An MCP stream goes through the public ALB only.
+
+**Fix:** this template sets `idle_timeout = var.alb_idle_timeout` (default 300) on the public and
+internal-server ALBs. On an install made before that, raise both by hand. No new apply is
+necessary:
+
+```bash
+for lb in <app>-<env>-public <app>-<env>-int-server; do
+  arn=$(aws elbv2 describe-load-balancers --names "$lb" --query 'LoadBalancers[0].LoadBalancerArn' --output text)
+  aws elbv2 modify-load-balancer-attributes --load-balancer-arn "$arn" \
+    --attributes Key=idle_timeout.timeout_seconds,Value=300
+done
+```
+
+The change has effect at once, with no restart. A later `terraform apply` of an older copy of
+this template sets the 60s default again.
+
+## `/autoptic-api/` returns the web app page
+
+**When:** `curl http://<public ALB DNS>/autoptic-api/health` returns HTML from `ui`, not the
+answer of `server`.
+
+**Why:** with `auth_enforce = false`, Terraform does not create the `/autoptic-api/` rule. The API
+then answers callers with no token, so it stays internal. The default action of the listener
+sends the request to `ui`.
+
+**Fix:** set `auth_enforce = true` and apply. Until then, call the API through the internal-server
+ALB from inside the VPC.

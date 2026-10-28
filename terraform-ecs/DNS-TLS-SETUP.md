@@ -1,6 +1,6 @@
 # Custom Domain + HTTPS Setup (Route 53 + ACM)
 
-The public ALB (`aws_lb.public`, fronting `ui`) only gets an HTTP listener by default, matching
+The public ALB (`aws_lb.public`, fronting `ui`, `/autoptic-api/` and `/mcp`) only gets an HTTP listener by default, matching
 Copilot's own default in `../copilot-ecs/DNS-TLS-SETUP.md`. The bare
 `*.elb.amazonaws.com` hostname can never get a real, browser-trusted certificate — public CAs
 (including ACM) won't issue one for a domain you don't own. To get HTTPS, you need:
@@ -112,6 +112,29 @@ resource "aws_route53_record" "ui_alias" {
 `aws_lb.public`, `aws_lb_target_group.ui`, and `var.aws_region` already exist in `alb.tf` /
 `variables.tf` — this file only adds new resources, it doesn't touch the existing HTTP listener.
 
+Open port 443 on the public ALB. Add the `https` rule to `ingress_rules` of `module "sg_alb_public"`
+in `security_groups.tf`. This security group has exclusive rules, so Terraform removes a rule that
+you add outside Terraform.
+
+```hcl
+  ingress_rules = {
+    http  = { cidr_ipv4 = "0.0.0.0/0", from_port = 80, to_port = 80 }
+    https = { cidr_ipv4 = "0.0.0.0/0", from_port = 443, to_port = 443 }
+  }
+```
+
+Then add the HTTPS listener to `local.public_listener_arns` in `alb.tf`. The `/autoptic-api/` and
+`/mcp` rules attach to each listener in this map. Without this change, HTTPS serves `ui` only.
+
+```hcl
+locals {
+  public_listener_arns = merge(
+    { http = aws_lb_listener.public_http.arn },
+    var.domain_name != null ? { https = aws_lb_listener.public_https[0].arn } : {},
+  )
+}
+```
+
 ## Step 2: Set the two new variables and apply
 
 ```bash
@@ -159,11 +182,27 @@ resource "aws_lb_listener" "public_http" {
 Do this only after confirming HTTPS works — reverting is just re-applying the original
 `forward` action if something's wrong.
 
+The `/autoptic-api/` and `/mcp` rules of the HTTP listener come before its default action. Thus
+these two paths still forward plain HTTP after the change above. To redirect them too, remove
+`http` from `local.public_listener_arns`:
+
+```hcl
+locals {
+  public_listener_arns = {
+    https = aws_lb_listener.public_https[0].arn
+  }
+}
+```
+
 ## Step 4: Verify
 
 ```bash
 curl -v https://<SUBDOMAIN>.<YOUR_DOMAIN>
+curl -s -o /dev/null -w '%{http_code}\n' https://<SUBDOMAIN>.<YOUR_DOMAIN>/autoptic-api/health   # 200
 ```
+
+The outputs `api_url` and `mcp_url` show the HTTP address of the ALB. After this setup, give
+people `https://<SUBDOMAIN>.<YOUR_DOMAIN>/autoptic-api/` and `https://<SUBDOMAIN>.<YOUR_DOMAIN>/mcp`.
 
 Confirm the certificate chain is valid and the response matches what you get hitting the ALB's
 own DNS name directly over HTTP (`terraform output public_alb_dns_name`). Open it in a browser

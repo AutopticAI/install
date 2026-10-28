@@ -1,17 +1,17 @@
-# All 6 security groups are created via terraform-aws-modules/security-group/aws. 4 plain
+# All 5 security groups are created via terraform-aws-modules/security-group/aws. Plain
 # aws_vpc_security_group_ingress_rule resources appear further down for the "ALB -> tasks"
-# direction of 4 mutually-referencing SG pairs — see the comment on module "sg_tasks" for why:
-# only that module's exclusive-rules mechanism actually needs disabling. The 4 ALB security
-# groups (sg_alb_public, plus the 3 in module.sg_alb below) each reference sg_tasks in one
-# direction only (their own "from_tasks" rule) and are never referenced back from inside
-# sg_tasks's own `ingress_rules` map (that direction lives in the plain resources instead) —
-# so enabling exclusive rules on these 4 is safe, and left on so Terraform still detects/reverts
-# any ingress or egress rule added out of band on them.
+# direction — see the comment on module "sg_tasks" for why: only that module's exclusive-rules
+# mechanism actually needs disabling. The 3 ALB security groups are sg_alb_public and the 2 in
+# module.sg_alb below. The `ingress_rules` map of sg_tasks never references them back, because
+# that direction lives in the plain resources. So exclusive rules are safe on these 3. They stay
+# on, so Terraform finds and reverts an ingress or egress rule added out of band on them.
 
 module "sg_alb_public" {
   source  = "terraform-aws-modules/security-group/aws"
   version = "6.0.0"
 
+  # The description stays "in front of ui", although this ALB also routes /autoptic-api/ and /mcp.
+  # A new description replaces the security group.
   name        = "${local.name_prefix}-alb-public"
   description = "Public ALB in front of ui"
   vpc_id      = module.vpc.vpc_id
@@ -26,14 +26,14 @@ module "sg_alb_public" {
   tags = local.tags
 }
 
-# server, vectors, and mcp each get an internal ALB with the identical security-group shape:
+# server and vectors each get an internal ALB with the identical security-group shape:
 # ingress from sg_tasks on the service's own port, wide-open egress. One for_each module
-# replaces what were 3 near-identical blocks, differing only in name, description, and port.
+# replaces near-identical blocks, differing only in name, description, and port. mcp has no
+# internal ALB: nothing in this stack calls it, and MCP clients use /mcp on the public ALB.
 locals {
   internal_albs = {
     server  = { port = 9999, description = "Internal ALB in front of server (called by ui and mcp)" }
     vectors = { port = 8000, description = "Internal ALB in front of vectors (called by server)" }
-    mcp     = { port = 7000, description = "Internal ALB in front of mcp (called by external MCP clients, not from inside this stack)" }
   }
 }
 
@@ -65,7 +65,7 @@ module "sg_tasks" {
   vpc_id      = module.vpc.vpc_id
 
   ingress_rules = {
-    # ALB -> task rules live as plain resources below, not here -- sg_alb_server/vectors/mcp
+    # ALB -> task rules live as plain resources below, not here -- sg_alb_server/vectors
     # each already reference sg_tasks.security_group_id for their own ingress (caller -> ALB),
     # so a reverse reference inside this module (ALB -> task) would create a module-to-module
     # dependency cycle (both sides would depend on each other's full module completion).
@@ -117,9 +117,22 @@ resource "aws_vpc_security_group_ingress_rule" "tasks_from_alb_vectors" {
   tags                         = local.tags
 }
 
-resource "aws_vpc_security_group_ingress_rule" "tasks_from_alb_mcp" {
+# The public ALB also reaches server (/autoptic-api/) and mcp (/mcp). The server rule exists
+# only when the /autoptic-api/ route exists (see local.public_api_enabled).
+resource "aws_vpc_security_group_ingress_rule" "tasks_from_alb_public_server" {
+  count = local.public_api_enabled ? 1 : 0
+
   security_group_id            = module.sg_tasks.id
-  referenced_security_group_id = module.sg_alb["mcp"].id
+  referenced_security_group_id = module.sg_alb_public.id
+  from_port                    = 9999
+  to_port                      = 9999
+  ip_protocol                  = "tcp"
+  tags                         = local.tags
+}
+
+resource "aws_vpc_security_group_ingress_rule" "tasks_from_alb_public_mcp" {
+  security_group_id            = module.sg_tasks.id
+  referenced_security_group_id = module.sg_alb_public.id
   from_port                    = 7000
   to_port                      = 7000
   ip_protocol                  = "tcp"
@@ -141,7 +154,7 @@ module "sg_efs" {
   # No egress_rules, intentionally -- exclusive rules stays enabled here (the module default),
   # so this SG ends up with zero egress permissions. NFS is one bidirectional TCP connection;
   # response traffic on an already-accepted inbound connection is stateful and needs no
-  # explicit egress rule. This is the tightest-scoped of the 6 security groups here, not an
+  # explicit egress rule. This is the tightest-scoped of the 5 security groups here, not an
   # oversight.
 
   tags = local.tags
