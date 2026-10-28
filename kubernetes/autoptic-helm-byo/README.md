@@ -26,7 +26,7 @@ For the automated flow where AWS resources are provisioned in-cluster, see the s
 This two-step installation flow gives you full control over AWS resource provisioning:
 
 1. **Step 1 (outside cluster)**: Use the `autoptic/server` container to generate `config.json` and create AWS resources.
-2. **Step 2 (in cluster)**: Deploy the Helm chart using the generated `config.json` via a user-provided ConfigMap.
+2. **Step 2 (in cluster)**: Deploy the Helm chart using the generated `config.json` via a user-provided Secret (`config.json`) and ConfigMap (instance identity).
 
 ### Architecture
 
@@ -45,8 +45,9 @@ This two-step installation flow gives you full control over AWS resource provisi
 ┌─────────────────────────────────────────────────────────────────┐
 │  Step 2: Kubernetes Cluster                                      │
 │  ┌─────────────────────────────────────────────────────────┐     │
-│  │ kubectl create configmap autoptic-config                │     │
+│  │ kubectl create secret generic autoptic-config-json      │     │
 │  │   --from-file=config.json                               │     │
+│  │ kubectl create configmap autoptic-config                │     │
 │  │   --from-literal=AUTOPTIC_INSTANCE_ID=<id>              │     │
 │  │   --from-literal=AUTOPTIC_TENANT_SHORT_NAME=<tenant>  │     │
 │  └─────────────────────────────────────────────────────────┘     │
@@ -205,7 +206,7 @@ The script prints two lines:
 
 Use those values in the next step.
 
-### 2B) Create namespace and ConfigMap
+### 2B) Create namespace, Secret and ConfigMap
 
 ```bash
 NS=autoptic-byo
@@ -215,8 +216,13 @@ TENANT_SHORT_NAME="<paste-tenant-short-name-from-python-output>"
 
 kubectl create namespace "$NS" --dry-run=client -o yaml | kubectl apply -f -
 
-kubectl -n "$NS" create configmap "$CM" \
+# config.json is a Secret. Each person who can read it can fetch every role token.
+kubectl -n "$NS" create secret generic "${CM}-json" \
   --from-file=config.json=./config.k8s.json \
+  --dry-run=client -o yaml | kubectl apply -f -
+
+# The ConfigMap keeps only the instance identity.
+kubectl -n "$NS" create configmap "$CM" \
   --from-literal=AUTOPTIC_INSTANCE_ID="$INSTANCE_ID" \
   --from-literal=AUTOPTIC_TENANT_SHORT_NAME="$TENANT_SHORT_NAME" \
   --dry-run=client -o yaml | kubectl apply -f -
@@ -231,17 +237,23 @@ INSTANCE_ID="autoptic7-823eb54dfe56676b"
 TENANT_SHORT_NAME="autoptic7"
 
 kubectl create namespace "$NS" --dry-run=client -o yaml | kubectl apply -f -
-kubectl -n "$NS" create configmap "$CM" \
+# config.json is a Secret. Each person who can read it can fetch every role token.
+kubectl -n "$NS" create secret generic "${CM}-json" \
   --from-file=config.json=./config.k8s.json \
+  --dry-run=client -o yaml | kubectl apply -f -
+
+# The ConfigMap keeps only the instance identity.
+kubectl -n "$NS" create configmap "$CM" \
   --from-literal=AUTOPTIC_INSTANCE_ID="$INSTANCE_ID" \
   --from-literal=AUTOPTIC_TENANT_SHORT_NAME="$TENANT_SHORT_NAME" \
   --dry-run=client -o yaml | kubectl apply -f -
 ```
 
-### 2B.2) Verify ConfigMap content
+### 2B.2) Verify the config
 
 ```bash
 kubectl -n "$NS" describe configmap "$CM"
+kubectl -n "$NS" get secret "${CM}-json" -o jsonpath='{.data.config\.json}' | base64 -d
 ```
 
 Expected runtime values in `config.json`:
@@ -272,8 +284,8 @@ helm upgrade --install autoptic-byo ./autoptic-helm-byo \
 
 **Required values:**
 - `namespace.name=<namespace>`: ensures rendered resources target the same namespace as Helm release
-- `config.useExisting=true`: Use the user-provided ConfigMap
-- `config.name=autoptic-config`: Name of the ConfigMap you created
+- `config.useExisting=true`: Use the user-provided ConfigMap and Secret
+- `config.name=autoptic-config`: Name of the ConfigMap you created. The chart reads `config.json` from the Secret `<config.name>-json`.
 - `serviceAccounts.s3DynamoDbAccess.roleArn`: IRSA role ARN for the pods
 
 **Optional but recommended:**
@@ -400,21 +412,24 @@ helm upgrade --install autoptic-byo ./autoptic-helm-byo \
 
 If you're switching from the automated `autoptic-helm` chart to this BYO chart:
 
-### 1. Export existing ConfigMap and Secret
+### 1. Export existing ConfigMap and Secrets
 
 ```bash
-# Export the ConfigMap
+# Export the ConfigMap (instance identity)
 kubectl -n autoptic get configmap autoptic-config -o yaml > autoptic-config-backup.yaml
+
+# Export the config.json Secret
+kubectl -n autoptic get secret autoptic-config-json -o yaml > autoptic-config-json-backup.yaml
 
 # Export the instance-id Secret
 kubectl -n autoptic get secret autoptic-instance-id -o yaml > autoptic-instance-id-backup.yaml
 ```
 
-### 2. Extract config.json from ConfigMap
+### 2. Extract config.json from the Secret
 
 ```bash
-kubectl -n autoptic get configmap autoptic-config \
-  -o jsonpath='{.data.config\.json}' > config.json
+kubectl -n autoptic get secret autoptic-config-json \
+  -o jsonpath='{.data.config\.json}' | base64 -d > config.json
 ```
 
 ### 3. Verify AWS resources exist
@@ -433,14 +448,17 @@ aws s3 ls | grep "autoptic-snaps-$(jq -r '.instance.id' config.json)"
 helm uninstall autoptic -n autoptic
 ```
 
-### 5. Create fresh ConfigMap with the BYO chart
+### 5. Create a fresh Secret and ConfigMap with the BYO chart
 
 ```bash
 INSTANCE_ID="$(jq -r '.instance.id' config.json)"
 TENANT_SHORT_NAME="$(jq -r '.instance.tenant_short_name' config.json)"
 
-kubectl -n autoptic create configmap autoptic-config \
+kubectl -n autoptic create secret generic autoptic-config-json \
   --from-file=config.json=./config.json \
+  --dry-run=client -o yaml | kubectl apply -f -
+
+kubectl -n autoptic create configmap autoptic-config \
   --from-literal=AUTOPTIC_INSTANCE_ID="$INSTANCE_ID" \
   --from-literal=AUTOPTIC_TENANT_SHORT_NAME="$TENANT_SHORT_NAME" \
   --dry-run=client -o yaml | kubectl apply -f -
@@ -478,7 +496,7 @@ entries), `autoptic_search_brief_records`/`_get_brief_record` (find and read pas
    API checks it against a value stored under the key `mcp.autoptic.service.<serverId>` in
    Autoptic's own secret store (`<serverId>` is `mcp.env.serverId` below). The pod refuses to
    start without it set (`config error: MCP_SERVER_TOKEN is required for streamable_http transport`).
-2. The `X-MCP-Token` header value an actual MCP client sends. This is a completely different,
+2. The `X-MCP-Token` header value an actual MCP client sends (together with `Authorization: Bearer <named token>` and `X-MCP-Endpoint`; see the docs page "Connect to Autoptic MCP and API"). This is a completely different,
    per-endpoint token, checked live by the Autoptic API against a value stored under the key
    `mcp.autoptic.server` in Autoptic's own secret store. This chart never creates or holds this
    value — create it directly in Autoptic (see your Autoptic API's secrets documentation), and
@@ -560,12 +578,13 @@ kubectl -n autoptic delete configmap autoptic-setup-state
 helm upgrade --install autoptic-byo ./autoptic-helm-byo -n autoptic --wait --wait-for-jobs
 ```
 
-### ConfigMap not found
+### ConfigMap or config Secret not found
 
-Ensure `config.useExisting=true` and the ConfigMap exists:
+Ensure `config.useExisting=true` and both objects exist:
 
 ```bash
 kubectl -n autoptic get configmap autoptic-config
+kubectl -n autoptic get secret autoptic-config-json
 ```
 
 ### Namespace typo (common)

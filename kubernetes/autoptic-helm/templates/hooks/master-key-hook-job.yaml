@@ -52,6 +52,7 @@ spec:
           import base64
           import json
           import os
+          import re
           from cryptography.fernet import Fernet
           import requests
 

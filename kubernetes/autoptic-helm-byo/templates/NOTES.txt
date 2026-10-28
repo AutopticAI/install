@@ -56,10 +56,18 @@ Useful commands:
   # View API logs
   kubectl logs --namespace {{ .Values.namespace.name }} -l app.kubernetes.io/component=api --tail=100 -f
 
-  # View configuration
-  kubectl get configmap --namespace {{ .Values.namespace.name }} {{ include "autoptic-server.configMapName" . }} -o yaml
+  # View config.json. It is a Secret. Only people who may read this Secret can fetch every role token.
+  kubectl get secret --namespace {{ .Values.namespace.name }} {{ include "autoptic-server.configSecretName" . }} -o jsonpath='{.data.config\.json}' | base64 -d
 
   # Test API health
   kubectl run test-api --rm -it --restart=Never --image=busybox:1.35 --namespace {{ .Values.namespace.name }} -- wget -O- http://{{ include "autoptic-server.fullname" . }}-api:{{ .Values.api.service.port }}/health
+
+Access control: api.auth.enforce={{ .Values.api.auth.enforce }}, api.auth.permissions={{ .Values.api.auth.permissions }}.
+{{- if or (and .Release.IsInstall .Values.rbac.mintOnInstall) (and .Release.IsUpgrade .Values.rbac.mintOnUpgrade) }}
+The setup-rbac hook minted the tokens. Get the role.admin token through bootstrap, and add the
+MCP keys for mcp 1.10. kubernetes/README.md ("Access control") in the install repo has both steps.
+{{- else if .Release.IsInstall }}
+rbac.mintOnInstall is false. Mint the tokens before anyone can use the API.
+{{- end }}
 
 For more information, visit the chart documentation.

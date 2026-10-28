@@ -12,12 +12,22 @@ metadata:
   namespace: {{ .Values.namespace.name }}
   labels:
     {{- include "autoptic-server.labels" . | nindent 4 }}
+{{- with .Values.config.extraData }}
 data:
-  config.json: |
-    {{- include "autoptic-server.configJson" . | nindent 4 }}
-  {{- with .Values.config.extraData }}
   {{- range $key, $value := . }}
   {{ $key }}: {{ $value | quote }}
   {{- end }}
-  {{- end }}
+{{- end }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "autoptic-server.configSecretName" . }}
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    {{- include "autoptic-server.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  config.json: |
+    {{- include "autoptic-server.configJson" . | nindent 4 }}
 {{- end }}

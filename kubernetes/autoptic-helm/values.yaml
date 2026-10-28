@@ -29,6 +29,23 @@ securityContext: {}
 # API Server Configuration
 # ============================================
 api:
+  # Access control (RBAC). On by default. The chart passes these as AUTH_* env vars to the API.
+  # bootstrapShaEnable: the Scheduler and the web app fetch their own tokens with the SHA-256 of
+  # config.json. enforce: every call needs a token. permissions: each token is limited to its
+  # scopes, and needs enforce. To opt out, set enforce and permissions to "false".
+  # Use "" to leave the server default (off).
+  auth:
+    enforce: "true"
+    observe: ""
+    permissions: "true"
+    bootstrapShaEnable: "true"
+    # CIDR ranges of the proxies whose X-Forwarded-For header the server trusts (AUTH_TRUSTED_PROXIES).
+    # The default is the private ranges, which cover the usual pod CIDR of the ingress.
+    # Narrow it to the pod CIDR of your cluster when you know it.
+    trustedProxies:
+      - 10.0.0.0/8
+      - 172.16.0.0/12
+      - 192.168.0.0/16
   enabled: true
   image: autoptic/server:latest
   imagePullPolicy: Always
@@ -125,16 +142,16 @@ scheduler:
 # ============================================
 mcp:
   enabled: true
-  image: autoptic/mcp:latest
+  image: autoptic/mcp:1.10.0
   imagePullPolicy: Always
   replicas: 1
   secretName: autoptic-mcp-secrets
 
   # mcpServerToken (MCP_SERVER_TOKEN): the mcp pod's own credential to the Autoptic API.
   # Leave empty and this chart generates one on first install, then keeps that same
-  # value on every later upgrade. This is NOT the value an MCP client sends as
-  # X-MCP-Token — see "MCP Server" in the README for that separate, per-endpoint token,
-  # which this chart does not create.
+  # value on every later upgrade. Add this value as mcp.autoptic.service.<serverId> in the
+  # default secret dict (kubernetes/README.md, "Access control"). This is NOT the value an MCP client sends
+  # as X-MCP-Token — that is the endpoint MCP key (mcp.autoptic.server), which you also add.
   # autopticApiToken is optional: an Autoptic API bearer token forwarded upstream per-request.
   # Ignored (and this Secret is not created) when externalSecrets.enabled=true —
   # sync the same two keys via your ExternalSecret in that case.
@@ -154,8 +171,8 @@ mcp:
   env:
     apiBaseUrl: http://api-service.autoptic.svc.cluster.local:9999/
     adminToolsEnabled: "false"
-    # Must match the key suffix in the external mcp.autoptic.service.<serverId> token registry.
-    serverId: ""
+    # The key mcp.autoptic.service.<serverId> holds the mcp-server-token value (kubernetes/README.md).
+    serverId: "autoptic-mcp"
 
   service:
     name: mcp-service
@@ -204,7 +221,7 @@ mcp:
     annotations: {}
 
 # ============================================
-# ConfigMap Configuration
+# Config Secret and identity ConfigMap
 # ============================================
 config:
   enabled: true
@@ -214,6 +231,9 @@ config:
   # configJsonString: |
   #   { "server": {"port": "9999"} }
   extraData: {}
+    # config.json is a Secret named <name>-json (autoptic-config-json). It is not a ConfigMap,
+    # because each caller that can read it can fetch every role token through bootstrap.
+    # With useExisting: true you create that Secret yourself.
     # Identity values are populated by setup hooks (auto chart) or user-provided ConfigMap (BYO chart).
     # Do not set AUTOPTIC_INSTANCE_ID or AUTOPTIC_TENANT_SHORT_NAME here.
     # Pods read these from the autoptic-config ConfigMap via configMapKeyRef.
@@ -558,3 +578,27 @@ nodeSelector: {}
 tolerations: []
 
 affinity: {}
+
+# ============================================
+# RBAC token minting (setup --rbac hook)
+# ============================================
+# mintOnInstall: a post-install Job mints the role and machine tokens. It logs their ids only.
+# Get the role.admin token through bootstrap (kubernetes/README.md, "Access control").
+# mintOnUpgrade: the same Job on upgrade. Use it one time, to move an existing install to access
+# control. It never replaces a token that has a value. Turn it off again after that upgrade.
+rbac:
+  mintOnInstall: true
+  mintOnUpgrade: false
+  hook:
+    backoffLimit: 3
+    activeDeadlineSeconds: 180
+    # The Job log holds the role.admin token. Kubernetes deletes the Job this many seconds after it
+    # finishes, so the admin has one day to read the log.
+    ttlSecondsAfterFinished: 86400
+    resources:
+      requests:
+        memory: "128Mi"
+        cpu: "100m"
+      limits:
+        memory: "256Mi"
+        cpu: "200m"

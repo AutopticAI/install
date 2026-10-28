@@ -31,6 +31,8 @@ spec:
           value: {{ .Values.namespace.name | quote }}
         - name: CONFIGMAP_NAME
           value: {{ include "autoptic-server.configMapName" . | quote }}
+        - name: CONFIG_SECRET_NAME
+          value: {{ include "autoptic-server.configSecretName" . | quote }}
         - name: INSTANCE_ID_SECRET_NAME
           value: {{ .Values.setup.instanceIdSecretName | quote }}
         - name: BASE_CONFIG_JSON
@@ -54,6 +56,7 @@ spec:
 
           namespace = os.environ["NAMESPACE"]
           configmap_name = os.environ["CONFIGMAP_NAME"]
+          config_secret_name = os.environ["CONFIG_SECRET_NAME"]
           instance_secret_name = os.environ["INSTANCE_ID_SECRET_NAME"]
           instance_id = os.environ.get("INSTANCE_ID", "")
           tenant_short_name = os.environ.get("TENANT_SHORT_NAME", "")
@@ -80,6 +83,27 @@ spec:
 
           def b64d(s):
               return base64.b64decode(s.encode("utf-8")).decode("utf-8")
+
+          def b64e(s):
+              return base64.b64encode(s.encode("utf-8")).decode("utf-8")
+
+          def upsert_config_secret(secret_name, text):
+              url = f"{base}/secrets/{secret_name}"
+              body = {
+                  "apiVersion": "v1",
+                  "kind": "Secret",
+                  "metadata": {"name": secret_name, "namespace": namespace},
+                  "type": "Opaque",
+                  "data": {"config.json": b64e(text)},
+              }
+              r = session.get(url, timeout=timeout)
+              if r.status_code == 404:
+                  session.post(f"{base}/secrets", data=json.dumps(body), timeout=timeout).raise_for_status()
+              elif r.status_code == 200:
+                  session.put(url, data=json.dumps(body), timeout=timeout).raise_for_status()
+              else:
+                  r.raise_for_status()
+              print(f"[config] Applied Secret {secret_name}")
 
           # Prefer values from the persisted Secret so resource names stay stable across reinstalls.
           sec_resp = session.get(f"{base}/secrets/{instance_secret_name}", timeout=timeout)
@@ -122,7 +146,6 @@ spec:
               "kind": "ConfigMap",
               "metadata": {"name": configmap_name, "namespace": namespace},
               "data": {
-                  "config.json": config_text,
                   "AUTOPTIC_INSTANCE_ID": instance_id,
                   "AUTOPTIC_TENANT_SHORT_NAME": tenant_short_name,
               },
@@ -137,6 +160,8 @@ spec:
               print(f"[restore] Updated ConfigMap {configmap_name}")
           else:
               cm_resp.raise_for_status()
+
+          upsert_config_secret(config_secret_name, config_text)
 
           print(f"[restore] Done. Instance ID: {instance_id}, Tenant: {tenant_short_name}")
           PY

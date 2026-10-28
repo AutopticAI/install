@@ -410,7 +410,7 @@ kubectl -n autoptic exec deploy/autoptic-api -- /server/api-server setup --load 
 - MCP (mcp-deployment, mcp-service, optional mcp-gateway HTTPRoute)
   - Exposes the Model Context Protocol server on port 7000 (`/mcp` for the protocol endpoint, `/health` for probes)
   - Talks to API at api-service:9999 (in-cluster, same namespace)
-  - Every request to `/mcp` must carry the `X-MCP-Token` header matching the `mcp-server-token` Secret key — requests without it get a 401, and the pod refuses to start at all if `MCP_SERVER_TOKEN` isn't set
+  - Every request to `/mcp` must carry three headers: `Authorization: Bearer <named token>`, `X-MCP-Token` (the endpoint's `mcp.autoptic.server` key) and `X-MCP-Endpoint`. See the docs page "Connect to Autoptic MCP and API". The pod refuses to start at all if `MCP_SERVER_TOKEN` isn't set
   - See "MCP Server" below for what it does and how to configure the required secret
 
 ### Gateway API vs Ingress
@@ -466,7 +466,7 @@ persisted-config CRUD tools (`autoptic_config_list`/`_get`/`_delete`, `autoptic_
    API checks it against a value stored under the key `mcp.autoptic.service.<serverId>` in
    Autoptic's own secret store (`<serverId>` is `mcp.env.serverId` below). The pod will not start
    without it set (`config error: MCP_SERVER_TOKEN is required for streamable_http transport`).
-2. The `X-MCP-Token` header value an actual MCP client sends. This is a completely different,
+2. The `X-MCP-Token` header value an actual MCP client sends (together with `Authorization: Bearer <named token>` and `X-MCP-Endpoint`; see the docs page "Connect to Autoptic MCP and API"). This is a completely different,
    per-endpoint token, checked live by the Autoptic API against a value stored under the key
    `mcp.autoptic.server` in Autoptic's own secret store. This chart never creates or holds this
    value — create it directly in Autoptic (see your Autoptic API's secrets documentation), and

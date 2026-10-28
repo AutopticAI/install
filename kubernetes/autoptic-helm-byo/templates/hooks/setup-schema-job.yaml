@@ -46,6 +46,6 @@ spec:
             memory: "256Mi"
       volumes:
       - name: config
-        configMap:
-          name: {{ include "autoptic-server.fullname" . }}-schema-config
+        secret:
+          secretName: {{ include "autoptic-server.fullname" . }}-schema-config
 {{- end }}

@@ -64,6 +64,31 @@ spec:
         {{- end }}
         {{- end }}
         {{- include "autoptic-server.instanceEnvBlock" . | nindent 8 }}
+        {{- $auth := .Values.api.auth | default dict }}
+        {{- if and (eq (toString $auth.permissions) "true") (ne (toString $auth.enforce) "true") }}
+        {{- fail "api.auth.permissions=true requires api.auth.enforce=true" }}
+        {{- end }}
+        {{- /* An upgrade must not turn on enforce for a release that ran without access control:
+             existing clients would stop at once, and tokens that were readable without auth
+             would stay valid. The live Deployment of an older chart has no AUTH_ENFORCE env. */}}
+        {{- if and .Release.IsUpgrade (eq (toString $auth.enforce) "true") }}
+        {{- $live := lookup "apps/v1" "Deployment" .Values.namespace.name (printf "%s-api" (include "autoptic-server.fullname" .)) }}
+        {{- if $live }}
+        {{- $hadAuth := false }}
+        {{- range $c := $live.spec.template.spec.containers }}{{- range $e := ($c.env | default list) }}{{- if eq $e.name "AUTH_ENFORCE" }}{{- $hadAuth = true }}{{- end }}{{- end }}{{- end }}
+        {{- if not $hadAuth }}
+        {{- fail "This upgrade turns on api.auth.enforce for a release that ran without access control. For this upgrade, set api.auth.enforce=false, api.auth.permissions=false and rbac.mintOnUpgrade=true. Then follow the upgrade steps on the docs page \"Access control\"." }}
+        {{- end }}
+        {{- end }}
+        {{- end }}
+        {{- range $name, $value := dict "AUTH_ENFORCE" $auth.enforce "AUTH_OBSERVE" $auth.observe "AUTH_PERMISSIONS" $auth.permissions "AUTH_BOOTSTRAP_SHA_ENABLE" $auth.bootstrapShaEnable }}
+        - name: {{ $name }}
+          value: {{ ternary "" (toString $value) (kindIs "invalid" $value) | quote }}
+        {{- end }}
+        {{- if $auth.trustedProxies }}
+        - name: AUTH_TRUSTED_PROXIES
+          value: {{ join "," $auth.trustedProxies | quote }}
+        {{- end }}
         volumeMounts:
         - name: config
           mountPath: /server/config.json
@@ -83,8 +108,8 @@ spec:
           {{- toYaml .Values.securityContext | nindent 10 }}
       volumes:
       - name: config
-        configMap:
-          name: {{ include "autoptic-server.configMapName" . }}
+        secret:
+          secretName: {{ include "autoptic-server.configSecretName" . }}
       {{- with .Values.api.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
