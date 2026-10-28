@@ -12,12 +12,14 @@ copilot-ecs/
 ├── config.json.example        ← what the S3-hosted config.json should look like
 ├── manifests/
 │   ├── env-manifest.yml       ← environment manifest (add TLS cert here)
-│   ├── server-manifest.yml    ← server + scheduler (sidecar) + init sidecar
-│   ├── ui-manifest.yml
+│   ├── server-manifest.yml    ← server + scheduler (sidecar) + init, setup_run and rbac_mint sidecars
+│   ├── mcp-manifest.yml
+│   ├── ui-manifest.yml        ← ui + init sidecar (config.json for token bootstrap)
 │   ├── metrics-manifest.yml
 │   └── vectors-manifest.yml
 ├── addons/
-│   └── server-policy.yml      ← IAM task role policy for server/scheduler
+│   ├── server-policy.yml      ← IAM task role policy for server/scheduler
+│   └── ui-policy.yml          ← lets the ui task read config.json from S3
 ├── overrides/
 │   └── metrics-service-connect-port.yml   ← YAML patch: exposes Qdrant's REST port (6333)
 │                                             on metrics, which vectors needs and no manifest
@@ -109,7 +111,7 @@ a whole file-delivery pipeline for something that never changes.
 
 ```bash
 aws s3 mb s3://<DEPLOY_ARTIFACTS_BUCKET>
-aws s3 cp ./config.json s3://<DEPLOY_ARTIFACTS_BUCKET>/config.json
+aws s3 cp ./config.json s3://<DEPLOY_ARTIFACTS_BUCKET>/config.json --sse AES256
 ```
 
 ---
@@ -139,13 +141,14 @@ aws servicediscovery list-namespaces --query 'Namespaces[].Name' --output table
 
 ---
 
-## Step 5: Initialize the four services
+## Step 5: Initialize the five services
 
 ```bash
 copilot svc init --name server  --svc-type "Backend Service"          --image <YOUR_ORG>/server:latest  --port 9999
 copilot svc init --name ui      --svc-type "Load Balanced Web Service" --image <YOUR_ORG>/ui:latest      --port 8080
 copilot svc init --name metrics --svc-type "Backend Service"          --image <YOUR_ORG>/metrics:latest --port 6334
 copilot svc init --name vectors --svc-type "Backend Service"          --image <YOUR_ORG>/vectors:latest --port 8000
+copilot svc init --name mcp     --svc-type "Load Balanced Web Service" --image <YOUR_ORG>/mcp:1.10.0     --port 7000
 ```
 
 > **`--port` is required on every service, including `Backend Service` ones with no ALB.**
@@ -169,8 +172,8 @@ annotated examples in `manifests/` in this directory (adjusted for your real val
 
 ## Step 6: Create the task role policy
 
-The app self-provisions its own DynamoDB tables and S3 bucket on first run, so the task
-role needs create permissions, not just read/write. See `addons/server-policy.yml` in this
+The `setup_run` sidecar creates the app's DynamoDB tables and S3 bucket on first start, so the
+task role needs create permissions, not just read/write. See `addons/server-policy.yml` in this
 directory for the full template — place it at `copilot/server/addons/policy.yml` in your
 project. Any `AWS::IAM::ManagedPolicy` output from a `copilot/<service>/addons/*.yml` file
 is automatically attached to that service's task role on the next deploy — no manual
@@ -274,12 +277,66 @@ adjust upward if your model is bigger.
 
 ---
 
+## Access control (before Step 12)
+
+Access control is on by default. `manifests/server-manifest.yml` sets `AUTH_ENFORCE`,
+`AUTH_PERMISSIONS` and `AUTH_BOOTSTRAP_SHA_ENABLE` to `"true"`. Before the API starts, its
+`setup_run` sidecar creates the tables, and its `rbac_mint` sidecar mints the tokens. The `init` sidecar sets
+`config.json` to mode 600.
+
+Create the credential of the MCP server before you deploy. Copilot reads it from SSM. The tags are
+required, or the task role cannot read the parameter:
+
+```bash
+aws ssm put-parameter --name /copilot/<APP_NAME>/<ENV_NAME>/secrets/mcp_server_token \
+  --type SecureString --value "$(openssl rand -hex 32)" \
+  --tags Key=copilot-application,Value=<APP_NAME> Key=copilot-environment,Value=<ENV_NAME>
+```
+
+Place `addons/ui-policy.yml` at `copilot/ui/addons/policy.yml`. The `ui` task needs it to read `config.json`.
+
+Set the same `MCP_SERVER_ID` in `manifests/server-manifest.yml` and `manifests/mcp-manifest.yml`.
+`rbac_mint` mints the role and machine tokens, and it logs their ids only.
+
+**Get the `role.admin` token.** The bootstrap route gives it to a caller that sends the SHA-256 of
+`config.json`. The `server` service has no public route, so send the request from inside the
+service:
+
+1. Calculate the SHA-256 of your `config.json`: `sha256sum config.json`.
+2. Open a shell in the `server` container. The server manifest sets `exec: true` for this:
+
+   ```bash
+   copilot svc exec --name server --env <ENV_NAME> --container server --command sh
+   ```
+
+3. In that shell, send the request:
+
+   ```bash
+   curl -s -X POST http://localhost:9999/story/ep/default/auth/bootstrap/credential \
+     -H 'Content-Type: application/json' \
+     -d '{"bootstrap_sha":"<sha256>","principal_id":"role.admin"}'
+   ```
+
+**MCP keys for mcp 1.10.** Released servers do not register the MCP keys. Add both in the web app,
+under Utils, Secrets, in the `default` secret dict:
+
+| Key | Value |
+|---|---|
+| `mcp.autoptic.service.<MCP_SERVER_ID>` | The value of the SSM parameter `mcp_server_token` above |
+| `mcp.autoptic.server` | A new random value, for example from `openssl rand -hex 32`. MCP clients send it as `X-MCP-Token`. |
+
+To opt out, set `AUTH_ENFORCE` and `AUTH_PERMISSIONS` to `"false"` in the server manifest.
+The docs page "Access control" has the steps for admins and for upgrades.
+
+---
+
 ## Step 12: Deploy in dependency order
 
 ```bash
 copilot svc deploy --name metrics --env <ENV_NAME>
 copilot svc deploy --name vectors --env <ENV_NAME>
 copilot svc deploy --name server  --env <ENV_NAME>
+copilot svc deploy --name mcp     --env <ENV_NAME>
 copilot svc deploy --name ui      --env <ENV_NAME>
 ```
 

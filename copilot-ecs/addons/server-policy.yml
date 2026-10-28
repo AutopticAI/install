@@ -5,8 +5,10 @@
 # no manual attach step needed. Since `scheduler` runs as a sidecar in the same task as
 # `server`, this one policy covers both.
 #
-# The app self-provisions its own DynamoDB tables and S3 bucket on first run, so this
-# needs Create* permissions, not just read/write.
+# The setup_run sidecar creates the DynamoDB tables and the S3 bucket on first start, so this
+# needs Create* permissions, not just read/write. The server names them
+# autoptic-<table>-<instance id> and autoptic-snaps-<instance id>, and the instance id starts
+# with the tenant short name.
 
 Parameters:
   App:
@@ -27,13 +29,15 @@ Resources:
             Action:
               - dynamodb:CreateTable
               - dynamodb:DescribeTable
+              - dynamodb:DescribeTimeToLive
+              - dynamodb:UpdateTimeToLive
               - dynamodb:PutItem
               - dynamodb:GetItem
               - dynamodb:Query
               - dynamodb:DeleteItem
               - dynamodb:ListTables
             Resource:
-              - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/<TENANT_SHORT_NAME>-*'
+              - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/autoptic-*-<TENANT_SHORT_NAME>-*'
           - Effect: Allow
             Action:
               - s3:CreateBucket
@@ -42,8 +46,8 @@ Resources:
               - s3:ListBucket
               - s3:DeleteObject
             Resource:
-              - !Sub 'arn:aws:s3:::<TENANT_SHORT_NAME>-snaps-*'
-              - !Sub 'arn:aws:s3:::<TENANT_SHORT_NAME>-snaps-*/*'
+              - !Sub 'arn:aws:s3:::autoptic-snaps-<TENANT_SHORT_NAME>-*'
+              - !Sub 'arn:aws:s3:::autoptic-snaps-<TENANT_SHORT_NAME>-*/*'
           - Effect: Allow
             Action:
               - s3:GetObject

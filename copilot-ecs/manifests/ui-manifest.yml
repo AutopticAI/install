@@ -44,3 +44,20 @@ storage:
 # instead, same as the AUTOPTIC_SERVER_URL convention used in the Kubernetes deployment:
 variables:
   AUTOPTIC_SERVER_URL: http://server.<ENV_NAME>.<APP_NAME>.local:9999/
+  # The web app sends the SHA-256 of this file to the bootstrap route to fetch its role tokens.
+  # The init sidecar below pulls the same config.json that server and scheduler load.
+  AUTOPTIC_CONFIG_PATH: /app/backend/data/config.json
+
+depends_on:
+  init: success
+
+sidecars:
+  init:
+    image: public.ecr.aws/aws-cli/aws-cli:latest
+    essential: false
+    entrypoint: ["/bin/sh", "-c"]   # see the GOTCHA in server-manifest.yml
+    command: ["aws s3 cp s3://<DEPLOY_ARTIFACTS_BUCKET>/config.json /app/backend/data/config.json && chmod 600 /app/backend/data/config.json"]
+    mount_points:
+      - source_volume: uidata
+        path: /app/backend/data
+        read_only: false
