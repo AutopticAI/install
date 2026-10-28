@@ -11,15 +11,24 @@ server_image  = "autoptic/server:latest"
 ui_image      = "autoptic/ui:latest"
 metrics_image = "autoptic/metrics:latest"
 vectors_image = "autoptic/vectors:latest"
-mcp_image     = "autoptic/mcp:latest"
+mcp_image     = "autoptic/mcp:1.10.0" # use 1.10.0 or later
 
-# server_health_path defaults to "health" (confirmed against the Kubernetes Helm chart's
-# probes) -- override only if your images use a different path.
+# server_health_path defaults to "health". Override it only if your images use a different path.
 # server_health_path = "health"
 
 deploy_artifacts_bucket_name = "<YOUR_DEPLOY_ARTIFACTS_BUCKET>" # must be globally unique
 config_json_path             = "./config.json"
 
 # mcp_admin_tools_enabled = false
-# mcp_server_id           = "local-demo" # must match a key suffix in the external token registry
-# mcp_server_token        = ""           # leave empty to auto-generate
+# mcp_server_id           = "local-demo" # key mcp.autoptic.service.<mcp_server_id>, see README.md
+# mcp_server_token        = ""           # leave empty to auto-generate. Add it by hand, see README.md
+
+# Access control is on by default. To opt out, set both to false. With auth_enforce = false, the
+# public ALB has no /autoptic-api/ route.
+# auth_enforce     = true
+# auth_permissions = true
+# auth_observe     = false
+# ui_role_mapping  = ""  # for example "user=role.operator"
+
+# Idle timeout of the public and internal-server ALBs. Long agent runs and MCP streams need it.
+# alb_idle_timeout = 300

@@ -2,9 +2,8 @@
 #
 # Why this exists: `aws ecs describe-services` returns only a short, rolling window of service
 # events, held by the service itself -- destroy the service and the whole history goes with it.
-# Every deployment failure on this project so far (IAM on the wrong role, a missing env var, an
-# EFS uid mismatch, a stale image) was reconstructed by hand from `describe-services` plus
-# stopped-task reasons, and only while the broken task still existed. This module copies the same
+# Without it, a failed deployment can only be read from `describe-services` and stopped-task
+# reasons while the broken task still exists. This module copies the same
 # events into a real log group, so the history outlives the task, the service, and the
 # `terraform destroy`.
 #

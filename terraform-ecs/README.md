@@ -57,9 +57,9 @@ generated file — delete that key, it isn't part of the real config schema (see
 ```bash
 cp terraform.tfvars.example terraform.tfvars   # fill in real values
 terraform init
-terraform apply -target=module.vpc -target=module.ecs \
+terraform apply -target=module.vpc -target=module.ecs -target=module.metrics \
   -target=aws_lb.internal_server -target=aws_lb.internal_vectors \
-  -target=aws_lb.internal_mcp -target=aws_lb.public
+  -target=aws_lb.public
 ```
 
 `config.json` needs the internal ALBs' DNS names, which don't exist until this first apply
@@ -103,13 +103,126 @@ rules, the S3 upload, the Secrets Manager secrets, EFS mount targets) and upload
 `config.json`. One `terraform apply` replaces Copilot's sequential `copilot svc deploy` calls;
 order is handled by Terraform's dependency graph, not manual sequencing.
 
+The `init` containers of `server` and `ui` carry the etag of `config.json` (`CONFIG_JSON_ETAG`).
+Thus each change to `config.json` gives both tasks a new task definition revision, and ECS
+restarts `server`, `scheduler` and `ui` with the new file. The same applies to later edits of
+`config.json`: edit the file, then run `terraform apply`.
+
 Run `terraform plan` immediately after — it should report **no changes**. If it doesn't, resolve
 that drift before moving on; see `TROUBLESHOOTING.md` for common causes.
+
+## Access control
+
+Access control is on by default. The `server` task runs two setup containers before `server` and
+`scheduler` start. `setup_run` creates the DynamoDB tables and the S3 snapshot bucket when they are
+missing. Then `rbac_mint` runs. It mints the role and machine tokens, and it logs their ids only.
+The `ui` task has its own `init` container that pulls `config.json`, because the web app needs the
+file to fetch its tokens through bootstrap.
+
+### Upgrading an existing install
+
+CAUTION: Give each API client a named token before you apply this template to an existing install.
+This template turns on `auth_enforce` and `auth_permissions`, and a call with no token gets `401`.
+
+To keep access control off, set `auth_enforce = false` and `auth_permissions = false` in
+`terraform.tfvars`. Then the public ALB has no `/autoptic-api/` route.
+
+### Get the `role.admin` token
+
+The bootstrap route gives the `role.admin` token to a caller that sends the SHA-256 of
+`config.json`. The public ALB refuses this route, so send the request from inside the VPC.
+
+1. Calculate the SHA-256 of the `config.json` that Terraform uploaded:
+
+   ```bash
+   sha256sum config.json
+   ```
+
+2. Open AWS CloudShell in a VPC environment. Use this VPC, one private subnet, and the security
+   group `<app>-<env>-tasks`.
+3. Send the request to the internal-server ALB (`terraform output internal_server_alb_dns_name`):
+
+   ```bash
+   curl -s -X POST "http://<internal_server_alb_dns_name>:9999/story/ep/default/auth/bootstrap/credential" \
+     -H 'Content-Type: application/json' \
+     -d '{"bootstrap_sha":"<sha256>","principal_id":"role.admin"}'
+   ```
+
+   The answer is `{"principal_id":"role.admin","token":"<token>"}`.
+
+CAUTION: Keep each copy of `config.json` as safe as the `role.admin` token. Its SHA-256 is the
+proof for bootstrap. Copies are in the deploy bucket (each version), on EFS, and on the computer
+that ran Terraform.
+
+### MCP keys for mcp 1.10
+
+Released servers do not register the MCP keys. Add both in the web app, under Utils, Secrets, in
+the `default` secret dict:
+
+| Key | Value |
+|---|---|
+| `mcp.autoptic.service.<mcp_server_id>` | The value of the Secrets Manager secret in `terraform output mcp_secret_arn` |
+| `mcp.autoptic.server` | A new random value, for example from `openssl rand -hex 32`. MCP clients send it as `X-MCP-Token`. |
+
+To read the first value, run this command:
+
+```bash
+aws secretsmanager get-secret-value --secret-id "$(terraform output -raw mcp_secret_arn)" \
+  --query SecretString --output text
+```
+
+### Trusted proxies
+
+`auth_trusted_proxies` defaults to the VPC range (`vpc_cidr`), where the load balancers run.
+Server releases up to 1.217.4 do not read `AUTH_TRUSTED_PROXIES`. With such a release, also set
+`auth.trusted_proxies` in `config.json`.
+
+The docs page "Access control" has the steps for admins and for upgrades.
+
+## Public routes
+
+The public ALB serves one host with the same paths as the Docker Compose nginx proxy:
+
+| Path | Service | Note |
+|---|---|---|
+| `/` | `ui` | The default action of the listener. |
+| `/autoptic-api/` | `server` | The ALB removes the `/autoptic-api` prefix. Only with `auth_enforce = true`. The bootstrap route answers `403`. |
+| `/mcp` | `mcp` | MCP clients connect here. |
+
+The API does not use `/api/`, because the web app has its own backend under `/api`.
+
+With `auth_enforce = false`, the API answers callers that send no token. Thus Terraform does not
+create the `/autoptic-api/` route, and the API stays on the internal-server ALB.
+
+`mcp` has no internal ALB. Nothing in the stack calls `mcp`, so `/mcp` on the public ALB is its
+only entry.
+
+To get the two URLs, run these commands:
+
+```bash
+terraform output api_url   # http://<public ALB DNS>/autoptic-api/
+terraform output mcp_url   # http://<public ALB DNS>/mcp
+```
+
+CAUTION: Add HTTPS before people use these routes in production. Each call sends a named token,
+and the default listener is plain HTTP. See `DNS-TLS-SETUP.md`.
+
+The ALB closes a request that sends no data for `alb_idle_timeout` seconds (default 300). Long
+agent runs and MCP streams need this value. The AWS default of 60 seconds is too short.
 
 ## Verifying
 
 ```bash
 terraform output public_alb_dns_name   # curl this — should load ui
+```
+
+Check the public routes. With `auth_enforce = true`, the API refuses a call with no token:
+
+```bash
+ALB=$(terraform output -raw public_alb_dns_name)
+curl -s -o /dev/null -w '%{http_code}\n' "http://$ALB/autoptic-api/health"            # 200
+curl -s -o /dev/null -w '%{http_code}\n' "http://$ALB/autoptic-api/story/ep/default/auth/whoami"  # 401
+curl -s -o /dev/null -w '%{http_code}\n' "http://$ALB/mcp"                             # 405 for a GET
 ```
 
 Check every service's health, not just `ui`'s:
@@ -122,10 +235,11 @@ done
 ```
 
 For the 4 load-balanced services (`server`, `ui`, `vectors`, `mcp` — not `metrics`, which has no
-ALB by design), also check target health directly:
+ALB by design), also check target health directly. `server` has a second target group,
+`server-pub`, for the public ALB. It exists only with `auth_enforce = true`:
 
 ```bash
-for tg in server ui vectors mcp; do
+for tg in server server-pub ui vectors mcp-pub; do
   arn=$(aws elbv2 describe-target-groups --names "<name_prefix>-$tg" --query 'TargetGroups[0].TargetGroupArn' --output text)
   aws elbv2 describe-target-health --target-group-arn "$arn" --query 'TargetHealthDescriptions[].TargetHealth.State'
 done
@@ -153,8 +267,8 @@ terraform destroy
 
 EFS with data and a versioned S3 bucket with objects will block a plain destroy unless emptied
 first — same caveat `../copilot-ecs/TEARDOWN.md` calls out for the Copilot version.
-The app's own self-provisioned DynamoDB tables and S3 snapshot bucket (created by `server` at
-runtime, not by Terraform) still need separate manual cleanup either way. A soft-deleted Secrets
+The app's own self-provisioned DynamoDB tables and S3 snapshot bucket (created by the `setup_run`
+container at runtime, not by Terraform) still need separate manual cleanup either way. A soft-deleted Secrets
 Manager secret name stays reserved for a 30-day recovery window unless you
 `aws secretsmanager delete-secret --force-delete-without-recovery` it — relevant if you plan to
 `destroy` and re-`apply` under the same `env` name soon after.
@@ -168,8 +282,9 @@ the public ALB. Treat it as a follow-up once the base HTTP deployment above is c
 ## Design notes: what's different from `copilot-ecs`
 
 1. **Every service is fronted by a load balancer**, not just `ui`. Internal ALBs mediate
-   `ui → server`, `server → vectors`, and `mcp → server` (`mcp`'s own outbound call). `mcp`'s
-   own ALB has no internal caller — it exists for external MCP clients, over `X-MCP-Token`.
+   `ui → server`, `server → vectors`, and `mcp → server` (`mcp`'s own outbound call). The public
+   ALB serves `ui`, the API (`/autoptic-api/`), and `mcp` (`/mcp`) on one host, like the Docker
+   Compose nginx proxy. `mcp` has no internal ALB, because nothing in the stack calls it.
    `vectors → metrics` and `server → metrics` stay on Service Connect, with no ALB in front of
    `metrics` — `server` has a client-only Service Connect membership just to resolve `metrics`'
    bare name for its direct Qdrant client, and publishes no alias of its own.

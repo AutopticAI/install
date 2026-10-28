@@ -178,8 +178,8 @@ The API listens on port 9999. How you reach it depends on the deployment:
 | Deployment | How to reach it |
 |---|---|
 | Kubernetes | `kubectl -n <namespace> port-forward svc/api-service 19999:9999`, then use `http://127.0.0.1:19999` |
-| Docker Compose | Already published on `9999`. Use `http://127.0.0.1:9999` |
-| ECS | The load balancer is internal, in private subnets, with no public listener. Reach it from inside the VPC, through a bastion host, an SSM port-forward session, or a VPN |
+| Docker Compose | The API has no published port. Use the nginx proxy: `http://127.0.0.1:6767/autoptic-api` |
+| ECS | Use the public ALB: `http://<public ALB DNS>/autoptic-api` (`terraform output api_url`). With `auth_enforce = false` the API is internal only: reach the internal-server ALB from inside the VPC |
 
 To migrate between two instances at once, forward each to its own local
 port. The examples above use 19999 for the source and 29999 for the
