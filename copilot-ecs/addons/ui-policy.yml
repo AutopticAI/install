@@ -1,0 +1,29 @@
+# copilot/ui/addons/policy.yml
+#
+# Lets the ui task read config.json from S3. The init sidecar in manifests/ui-manifest.yml copies it
+# onto the ui data volume, because the web app needs the file to fetch its tokens through bootstrap.
+
+Parameters:
+  App:
+    Type: String
+  Env:
+    Type: String
+  Name:
+    Type: String
+
+Resources:
+  ConfigJsonReadPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - s3:GetObject
+            Resource:
+              - arn:aws:s3:::<DEPLOY_ARTIFACTS_BUCKET>/config.json
+
+Outputs:
+  ConfigJsonReadPolicyArn:
+    Value: !Ref ConfigJsonReadPolicy

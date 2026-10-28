@@ -34,6 +34,16 @@ network:
 command: ["api", "-config", "/mnt/shared/config.json"]
 depends_on:
   init: success
+  rbac_mint: success   # tokens exist before the API starts, so enforce never has an open window
+
+# Access control is on by default. To opt out, set AUTH_ENFORCE and AUTH_PERMISSIONS to "false".
+# AUTH_TRUSTED_PROXIES: the load balancer is the proxy for every caller. 10.0.0.0/16 is the VPC range
+# of `copilot env init --default-config`. Change it if your environment uses another range.
+variables:
+  AUTH_ENFORCE: "true"
+  AUTH_PERMISSIONS: "true"
+  AUTH_BOOTSTRAP_SHA_ENABLE: "true"
+  AUTH_TRUSTED_PROXIES: 10.0.0.0/16
 
 healthcheck:
   # Replace with a real, cheap endpoint that proves the app is actually serving traffic —
@@ -61,17 +71,54 @@ sidecars:
     # `command` without overriding `entrypoint`, ECS runs `aws sh -c "..."` (entrypoint +
     # command concatenated) — invalid syntax, exits with code 252. Always override both.
     entrypoint: ["/bin/sh", "-c"]
-    command: ["aws s3 cp s3://<DEPLOY_ARTIFACTS_BUCKET>/config.json /mnt/shared/config.json"]
+    # chmod 600: each caller that can read config.json can fetch every role token through
+    # bootstrap. The EFS access point maps every client to one POSIX user, so only the containers
+    # of this task can still read it.
+    command: ["aws s3 cp s3://<DEPLOY_ARTIFACTS_BUCKET>/config.json /mnt/shared/config.json && chmod 600 /mnt/shared/config.json"]
     mount_points:
       - source_volume: sharedfiles
         path: /mnt/shared
         read_only: false   # init needs write access to actually place the file
 
+  # Runs "setup --run". It creates the DynamoDB tables and the S3 snapshot bucket when they are
+  # missing, and changes nothing that exists, so every task start can run it. The api command
+  # does not create tables, and rbac_mint needs them.
+  setup_run:
+    image: <YOUR_ORG>/server:latest
+    essential: false
+    command: ["setup", "--run", "/mnt/shared/config.json"]
+    depends_on:
+      init: success
+    mount_points:
+      - source_volume: sharedfiles
+        path: /mnt/shared
+        read_only: true
+
+  # Runs "setup --rbac" before server and scheduler start. It mints the role and machine tokens. It
+  # never replaces a value that exists, so a task restart is safe. It logs the ids only. README.md
+  # ("Access control") shows how to get the role.admin token and how to add the MCP keys.
+  rbac_mint:
+    image: <YOUR_ORG>/server:latest
+    essential: false
+    command: ["setup", "--rbac", "/mnt/shared/config.json"]
+    depends_on:
+      setup_run: success
+    variables:
+      MCP_SERVER_ID: <MCP_SERVER_ID>   # a lowercase slug, for example autoptic-mcp
+    secrets:
+      MCP_SERVER_TOKEN: /copilot/${COPILOT_APPLICATION_NAME}/${COPILOT_ENVIRONMENT_NAME}/secrets/mcp_server_token
+    mount_points:
+      - source_volume: sharedfiles
+        path: /mnt/shared
+        read_only: true
+
   scheduler:
     image: <YOUR_ORG>/server:latest
     command: ["scheduler", "-config", "/mnt/shared/config.json"]
+    # The scheduler fetches its own token through bootstrap, so it needs no AUTH_* env.
     depends_on:
       init: success
+      rbac_mint: success
     mount_points:
       - source_volume: sharedfiles
         path: /mnt/shared
