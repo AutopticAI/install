@@ -48,7 +48,7 @@ spec:
           import requests
 
           namespace = os.environ["NAMESPACE"]
-          configmap_name = os.environ["CONFIGMAP_NAME"]
+          config_secret_name = os.environ["CONFIGMAP_NAME"]
           instance_secret_name = os.environ["INSTANCE_ID_SECRET_NAME"]
           config = json.loads(os.environ["BASE_CONFIG_JSON"])
 
@@ -73,6 +73,27 @@ spec:
           def b64d(s):
               return base64.b64decode(s.encode("utf-8")).decode("utf-8")
 
+          def b64e(s):
+              return base64.b64encode(s.encode("utf-8")).decode("utf-8")
+
+          def upsert_config_secret(secret_name, text):
+              url = f"{base}/secrets/{secret_name}"
+              body = {
+                  "apiVersion": "v1",
+                  "kind": "Secret",
+                  "metadata": {"name": secret_name, "namespace": namespace},
+                  "type": "Opaque",
+                  "data": {"config.json": b64e(text)},
+              }
+              r = session.get(url, timeout=timeout)
+              if r.status_code == 404:
+                  session.post(f"{base}/secrets", data=json.dumps(body), timeout=timeout).raise_for_status()
+              elif r.status_code == 200:
+                  session.put(url, data=json.dumps(body), timeout=timeout).raise_for_status()
+              else:
+                  r.raise_for_status()
+              print(f"[config] Applied Secret {secret_name}")
+
           # Prefer the persisted instance Secret so schema verification checks the
           # tables that actually exist, not whatever instance ID was passed at
           # template time (which can go stale on reinstalls/upgrades).
@@ -90,23 +111,6 @@ spec:
 
           config_text = json.dumps(config, indent=2) + "\n"
 
-          cm_url = f"{base}/configmaps/{configmap_name}"
-          cm_resp = session.get(cm_url, timeout=timeout)
-          cm_body = {
-              "apiVersion": "v1",
-              "kind": "ConfigMap",
-              "metadata": {"name": configmap_name, "namespace": namespace},
-              "data": {"config.json": config_text},
-          }
-          if cm_resp.status_code == 404:
-              r = session.post(f"{base}/configmaps", data=json.dumps(cm_body), timeout=timeout)
-              r.raise_for_status()
-              print(f"[schema-config] Created ConfigMap {configmap_name}")
-          elif cm_resp.status_code == 200:
-              r = session.put(cm_url, data=json.dumps(cm_body), timeout=timeout)
-              r.raise_for_status()
-              print(f"[schema-config] Updated ConfigMap {configmap_name}")
-          else:
-              cm_resp.raise_for_status()
+          upsert_config_secret(config_secret_name, config_text)
           PY
 {{- end }}

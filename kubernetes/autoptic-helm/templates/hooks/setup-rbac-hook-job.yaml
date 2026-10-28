@@ -1,0 +1,72 @@
+{{- $rbac := .Values.rbac | default dict }}
+{{- if or $rbac.mintOnInstall $rbac.mintOnUpgrade }}
+{{- $hooks := list }}
+{{- if $rbac.mintOnInstall }}{{- $hooks = append $hooks "post-install" }}{{- end }}
+{{- if $rbac.mintOnUpgrade }}{{- $hooks = append $hooks "post-upgrade" }}{{- end }}
+{{- $hook := $rbac.hook | default dict }}
+{{/*
+Runs "setup --rbac". It mints the role and machine tokens and logs their ids only. The Job stays
+for rbac.hook.ttlSecondsAfterFinished after it finishes, then Kubernetes deletes it. A later run
+replaces the Job.
+*/}}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "autoptic-server.fullname" . }}-setup-rbac-hook
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    {{- include "autoptic-server.labels" . | nindent 4 }}
+    component: setup-rbac-hook
+  annotations:
+    helm.sh/hook: {{ join "," $hooks }}
+    helm.sh/hook-weight: "5"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: {{ $hook.backoffLimit | default 3 }}
+  activeDeadlineSeconds: {{ $hook.activeDeadlineSeconds | default 180 }}
+  ttlSecondsAfterFinished: {{ if hasKey $hook "ttlSecondsAfterFinished" }}{{ $hook.ttlSecondsAfterFinished }}{{ else }}86400{{ end }}
+  template:
+    metadata:
+      labels:
+        {{- include "autoptic-server.labels" . | nindent 8 }}
+        component: setup-rbac-hook
+    spec:
+      serviceAccountName: {{ include "autoptic-server.serviceAccountName" . }}
+      restartPolicy: Never
+      containers:
+      - name: setup-rbac
+        image: "{{ .Values.api.image }}"
+        imagePullPolicy: {{ .Values.api.imagePullPolicy }}
+        args:
+          - "setup"
+          - "--rbac"
+          - "/server/config.json"
+        env:
+        - name: AUTOPTIC_CMD
+          value: {{ .Values.api.env.pqlCommand | default "/server/pql" | quote }}
+        {{- include "autoptic-server.awsEnvBlock" . | nindent 8 }}
+        {{- include "autoptic-server.instanceEnvBlock" . | nindent 8 }}
+        {{- if .Values.mcp.enabled }}
+        - name: MCP_SERVER_ID
+          value: {{ .Values.mcp.env.serverId | required "mcp.env.serverId is required when mcp.enabled=true" | quote }}
+        - name: MCP_SERVER_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.mcp.secretName }}
+              key: mcp-server-token
+        {{- end }}
+        volumeMounts:
+        - name: config
+          mountPath: /server/config.json
+          subPath: config.json
+          readOnly: true
+        {{- with $hook.resources }}
+        resources:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+      volumes:
+      - name: config
+        secret:
+          secretName: {{ include "autoptic-server.configSecretName" . }}
+{{- end }}

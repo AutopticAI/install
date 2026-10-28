@@ -104,6 +104,15 @@ ConfigMap name
 {{- end }}
 
 {{/*
+Secret name for config.json. The file holds nothing secret by itself, but each caller that can read
+it can fetch every role token through bootstrap, so it lives in a Secret and not in a ConfigMap.
+The ConfigMap keeps only the instance identity keys.
+*/}}
+{{- define "autoptic-server.configSecretName" -}}
+{{- printf "%s-json" (include "autoptic-server.configMapName" .) }}
+{{- end }}
+
+{{/*
 Generate config.json content
 Priority: configJsonString > configJson > default structure from env vars
 */}}

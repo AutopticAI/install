@@ -280,6 +280,47 @@ The metrics (Qdrant) deployment includes an initContainer that seeds the PVC fro
 ### IRSA Support
 Both charts use IRSA as the primary AWS authentication method. No static AWS credentials are required in the cluster.
 
+## Access control
+
+Both charts turn on access control by default (`api.auth.enforce`, `api.auth.permissions` and
+`api.auth.bootstrapShaEnable` are `"true"`). `rbac.mintOnInstall` runs a post-install Job that mints the
+role and machine tokens. The Job logs their ids only, not the values. The Job stays for
+`rbac.hook.ttlSecondsAfterFinished` (default one day), then Kubernetes deletes it.
+
+**Get the `role.admin` token**
+
+The bootstrap route gives the `role.admin` token to a caller that sends the SHA-256 of `config.json`:
+
+```bash
+SHA=$(kubectl get secret -n <namespace> <config.name>-json -o jsonpath='{.data.config\.json}' | base64 -d | sha256sum | cut -d' ' -f1)
+kubectl -n <namespace> port-forward svc/api-service 19999:9999 &
+curl -s -X POST http://127.0.0.1:19999/story/ep/default/auth/bootstrap/credential \
+  -H 'Content-Type: application/json' \
+  -d "{\"bootstrap_sha\":\"$SHA\",\"principal_id\":\"role.admin\"}"
+```
+
+The answer is `{"principal_id":"role.admin","token":"<token>"}`.
+
+**MCP keys for mcp 1.10**
+
+Released servers do not register the MCP keys. Add both in the web app, under Utils, Secrets, in the
+`default` secret dict:
+
+| Key | Value |
+|---|---|
+| `mcp.autoptic.service.<mcp.env.serverId>` | The `mcp-server-token` value of the Secret `mcp.secretName` (default `autoptic-mcp-secrets`) |
+| `mcp.autoptic.server` | A new random value, for example from `openssl rand -hex 32`. MCP clients send it as `X-MCP-Token`. |
+
+`config.json` is a Secret (`<config.name>-json`), not a ConfigMap. Each person who can read it can fetch
+every role token. Limit who may read Secrets in the namespace.
+
+To opt out, set `api.auth.enforce` and `api.auth.permissions` to `"false"`.
+
+An upgrade of a release that ran without access control stops with an error while `api.auth.enforce` is
+`"true"`. For that first upgrade, set `api.auth.enforce=false`, `api.auth.permissions=false` and
+`rbac.mintOnUpgrade=true`. The same upgrade moves `config.json` from the ConfigMap to the Secret. The docs
+page "Access control" has the next steps.
+
 ## Migration Between Charts
 
 ### From Automated to BYO

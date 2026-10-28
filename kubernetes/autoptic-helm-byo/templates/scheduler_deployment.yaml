@@ -90,8 +90,8 @@ spec:
           {{- toYaml .Values.securityContext | nindent 10 }}
       volumes:
       - name: config
-        configMap:
-          name: {{ include "autoptic-server.configMapName" . }}
+        secret:
+          secretName: {{ include "autoptic-server.configSecretName" . }}
       {{- with .Values.scheduler.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
