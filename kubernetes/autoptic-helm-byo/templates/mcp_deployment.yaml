@@ -1,4 +1,15 @@
 {{- if .Values.mcp.enabled }}
+{{- /* mcp before 1.11.0 needs MCP_SERVER_TOKEN, which this chart no longer gives. helm upgrade
+--reuse-values keeps the old chart default, autoptic/mcp:1.10.0, so stop here with the fix. */}}
+{{- $mcpVersion := regexFind ":[0-9]+\\.[0-9]+[^:/]*$" .Values.mcp.image }}
+{{- if $mcpVersion }}
+{{- $v := splitList "." (trimPrefix ":" $mcpVersion) }}
+{{- $major := atoi (index $v 0) }}
+{{- $minor := atoi (regexFind "^[0-9]+" (index $v 1)) }}
+{{- if or (lt $major 1) (and (eq $major 1) (lt $minor 11)) }}
+{{- fail (printf "mcp.image %s is older than 1.11.0. This chart gives mcp no MCP_SERVER_TOKEN, so an older mcp does not start. Set mcp.image to autoptic/mcp:1.11.0 or later. With helm upgrade --reuse-values, add --set mcp.image=autoptic/mcp:1.11.0." .Values.mcp.image) }}
+{{- end }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:

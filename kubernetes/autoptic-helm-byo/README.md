@@ -504,7 +504,7 @@ The MCP server refuses each tool call with `AUTH_FAILED` ("MCP is off") while `a
 **Connecting to it:**
 
 - **From within the cluster** (an agent's `where[]` MCP entry): give the agents their own named
-  token, and save it in the secrets of the endpoint. Then send it with `auth.type` `bearer`:
+  token. Save it in the secrets of the endpoint. Send it with `auth.type` `bearer`:
 
   ```json
   {
@@ -528,8 +528,9 @@ The MCP server refuses each tool call with `AUTH_FAILED` ("MCP is off") while `a
 
 1. Make sure that `whoami` reports `"enforced":true`. kubernetes/README.md ("Access control") has
    the command.
-2. If you set `mcp.image` yourself, set it to 1.11.0 or later. With this chart, an older `mcp`
-   image does not start, because it needs `MCP_SERVER_TOKEN`.
+2. Set `mcp.image` to 1.11.0 or later. `helm upgrade --reuse-values` keeps the old default,
+   `autoptic/mcp:1.10.0`. Add `--set mcp.image=autoptic/mcp:1.11.0`, or use
+   `--reset-then-reuse-values`. The chart stops with an error when `mcp.image` is older than 1.11.0.
 3. Run `helm upgrade`. The chart removes the Secret `autoptic-mcp-secrets`, and the `MCP_SERVER_ID`
    and `MCP_SERVER_TOKEN` variables.
 4. If `externalSecrets.enabled` is `true`, remove the `ExternalSecret` that you made for
