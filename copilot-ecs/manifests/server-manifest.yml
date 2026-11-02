@@ -96,17 +96,13 @@ sidecars:
 
   # Runs "setup --rbac" before server and scheduler start. It mints the role and machine tokens. It
   # never replaces a value that exists, so a task restart is safe. It logs the ids only. README.md
-  # ("Access control") shows how to get the role.admin token and how to add the MCP keys.
+  # ("Access control") shows how to get the role.admin token.
   rbac_mint:
     image: <YOUR_ORG>/server:latest
     essential: false
     command: ["setup", "--rbac", "/mnt/shared/config.json"]
     depends_on:
       setup_run: success
-    variables:
-      MCP_SERVER_ID: <MCP_SERVER_ID>   # a lowercase slug, for example autoptic-mcp
-    secrets:
-      MCP_SERVER_TOKEN: /copilot/${COPILOT_APPLICATION_NAME}/${COPILOT_ENVIRONMENT_NAME}/secrets/mcp_server_token
     mount_points:
       - source_volume: sharedfiles
         path: /mnt/shared

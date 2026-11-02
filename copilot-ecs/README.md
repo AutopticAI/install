@@ -148,7 +148,7 @@ copilot svc init --name server  --svc-type "Backend Service"          --image <Y
 copilot svc init --name ui      --svc-type "Load Balanced Web Service" --image <YOUR_ORG>/ui:latest      --port 8080
 copilot svc init --name metrics --svc-type "Backend Service"          --image <YOUR_ORG>/metrics:latest --port 6334
 copilot svc init --name vectors --svc-type "Backend Service"          --image <YOUR_ORG>/vectors:latest --port 8000
-copilot svc init --name mcp     --svc-type "Load Balanced Web Service" --image <YOUR_ORG>/mcp:1.10.0     --port 7000
+copilot svc init --name mcp     --svc-type "Load Balanced Web Service" --image <YOUR_ORG>/mcp:1.11.0     --port 7000
 ```
 
 > **`--port` is required on every service, including `Backend Service` ones with no ALB.**
@@ -284,18 +284,8 @@ Access control is on by default. `manifests/server-manifest.yml` sets `AUTH_ENFO
 `setup_run` sidecar creates the tables, and its `rbac_mint` sidecar mints the tokens. The `init` sidecar sets
 `config.json` to mode 600.
 
-Create the credential of the MCP server before you deploy. Copilot reads it from SSM. The tags are
-required, or the task role cannot read the parameter:
-
-```bash
-aws ssm put-parameter --name /copilot/<APP_NAME>/<ENV_NAME>/secrets/mcp_server_token \
-  --type SecureString --value "$(openssl rand -hex 32)" \
-  --tags Key=copilot-application,Value=<APP_NAME> Key=copilot-environment,Value=<ENV_NAME>
-```
-
 Place `addons/ui-policy.yml` at `copilot/ui/addons/policy.yml`. The `ui` task needs it to read `config.json`.
 
-Set the same `MCP_SERVER_ID` in `manifests/server-manifest.yml` and `manifests/mcp-manifest.yml`.
 `rbac_mint` mints the role and machine tokens, and it logs their ids only.
 
 **Get the `role.admin` token.** The bootstrap route gives it to a caller that sends the SHA-256 of
@@ -317,16 +307,45 @@ service:
      -d '{"bootstrap_sha":"<sha256>","principal_id":"role.admin"}'
    ```
 
-**MCP keys for mcp 1.10.** Released servers do not register the MCP keys. Add both in the web app,
-under Utils, Secrets, in the `default` secret dict:
+**Named tokens and MCP.** Create a named token for each person in the web app: Tokens, New
+principal, Person. The `mcp` service has no secret of its own. Each MCP client sends two headers to
+`http://<environment load balancer DNS>/mcp`:
 
-| Key | Value |
-|---|---|
-| `mcp.autoptic.service.<MCP_SERVER_ID>` | The value of the SSM parameter `mcp_server_token` above |
-| `mcp.autoptic.server` | A new random value, for example from `openssl rand -hex 32`. MCP clients send it as `X-MCP-Token`. |
+- `Authorization: Bearer <named token>`
+- `X-MCP-Endpoint: default`
 
-To opt out, set `AUTH_ENFORCE` and `AUTH_PERMISSIONS` to `"false"` in the server manifest.
-The docs page "Access control" has the steps for admins and for upgrades.
+The docs page "Connect to Autoptic MCP and API" gives users the steps.
+
+`mcp` refuses each tool call while `AUTH_ENFORCE` or `AUTH_PERMISSIONS` is off. Before a client
+connects, make sure that the API enforces access control. In the shell of the `server` container:
+
+```bash
+curl -s http://localhost:9999/story/ep/default/auth/whoami -H "x-api-token: <named token>"
+```
+
+The answer must contain `"enforced":true`.
+
+To opt out, set `AUTH_ENFORCE` and `AUTH_PERMISSIONS` to `"false"` in the server manifest. Then
+`mcp` refuses each tool call. The docs page "Access control" has the steps for admins and for
+upgrades.
+
+**Upgrade from mcp 1.10.** mcp 1.11.0 removes the MCP keys. Clients that still send `X-MCP-Token`
+keep working, because mcp 1.11.0 ignores this header.
+
+1. Run the `whoami` check above. The answer must contain `"enforced":true`.
+2. Remove `MCP_SERVER_ID` and `MCP_SERVER_TOKEN` from `copilot/server/manifest.yml` and
+   `copilot/mcp/manifest.yml`.
+3. In `copilot/mcp/manifest.yml`, set the image to 1.11.0 or later.
+4. Deploy `server`, then `mcp`.
+5. Remove the `X-MCP-Token` header from the MCP clients. You can do this at any time.
+6. Erase the SSM parameter of the old credential:
+
+   ```bash
+   aws ssm delete-parameter --name /copilot/<APP_NAME>/<ENV_NAME>/secrets/mcp_server_token
+   ```
+
+7. When no MCP 1.10 server uses this API, erase two keys from the `default` secret dict. The keys
+   are `mcp.autoptic.server` and `mcp.autoptic.service.<MCP_SERVER_ID>` (web app: Utils, Secrets).
 
 ---
 

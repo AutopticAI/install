@@ -5,7 +5,8 @@
 # this one has 'mcp'. The load balancer forwards /mcp unchanged, which is the path the MCP server
 # serves. MCP clients use http://<environment load balancer DNS>/mcp (or your alias, see
 # DNS-TLS-SETUP.md).
-# Each MCP client sends its own named API token as Bearer, so this service holds no API token.
+# Use 1.11.0 or later. This service has no secret. Each MCP client sends its own named API token as
+# Bearer. The MCP server refuses each tool call while AUTH_ENFORCE or AUTH_PERMISSIONS is off.
 
 name: mcp
 type: Load Balanced Web Service
@@ -16,7 +17,7 @@ http:
     path: /health
 
 image:
-  location: <YOUR_ORG>/mcp:1.10.0   # use 1.10.0 or later
+  location: <YOUR_ORG>/mcp:1.11.0   # use 1.11.0 or later
   port: 7000
 
 cpu: 256
@@ -33,9 +34,3 @@ variables:
   SERVER_PORT: "7000"
   AUTOPTIC_API_BASE_URL: http://server.<ENV_NAME>.<APP_NAME>.local:9999/
   MCP_ADMIN_TOOLS_ENABLED: "false"
-  MCP_SERVER_ID: <MCP_SERVER_ID>   # the same value as in the server manifest (rbac_mint)
-
-# The credential of this MCP server. Add the same value as mcp.autoptic.service.<MCP_SERVER_ID>
-# in the default secret dict. See the README, "Access control".
-secrets:
-  MCP_SERVER_TOKEN: /copilot/${COPILOT_APPLICATION_NAME}/${COPILOT_ENVIRONMENT_NAME}/secrets/mcp_server_token
