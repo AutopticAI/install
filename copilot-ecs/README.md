@@ -330,7 +330,8 @@ To opt out, set `AUTH_ENFORCE` and `AUTH_PERMISSIONS` to `"false"` in the server
 upgrades.
 
 **Upgrade from mcp 1.10.** mcp 1.11.0 removes the MCP keys. Clients that still send `X-MCP-Token`
-keep working, because mcp 1.11.0 ignores this header.
+keep working, because mcp 1.11.0 ignores this header. mcp 1.11.0 needs server 1.216.0 or later.
+If your registry has an older copy of `server:latest`, copy the new image to it first.
 
 1. Run the `whoami` check above. The answer must contain `"enforced":true`.
 2. Remove `MCP_SERVER_ID` and `MCP_SERVER_TOKEN` from `copilot/server/manifest.yml` and

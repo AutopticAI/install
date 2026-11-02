@@ -5,8 +5,9 @@
 # this one has 'mcp'. The load balancer forwards /mcp unchanged, which is the path the MCP server
 # serves. MCP clients use http://<environment load balancer DNS>/mcp (or your alias, see
 # DNS-TLS-SETUP.md).
-# Use 1.11.0 or later. This service has no secret. Each MCP client sends its own named API token as
-# Bearer. The MCP server refuses each tool call while AUTH_ENFORCE or AUTH_PERMISSIONS is off.
+# Use 1.11.0 or later, with server 1.216.0 or later. This service has no secret. Each MCP client
+# sends its own named API token as Bearer. The MCP server refuses each tool call while AUTH_ENFORCE
+# or AUTH_PERMISSIONS is off.
 
 name: mcp
 type: Load Balanced Web Service
@@ -17,7 +18,7 @@ http:
     path: /health
 
 image:
-  location: <YOUR_ORG>/mcp:1.11.0   # use 1.11.0 or later
+  location: <YOUR_ORG>/mcp:1.11.0   # use 1.11.0 or later, with server 1.216.0 or later
   port: 7000
 
 cpu: 256
