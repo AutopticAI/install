@@ -499,7 +499,7 @@ The MCP server refuses each tool call with `AUTH_FAILED` ("MCP is off") while `a
 1. Make sure that `whoami` reports `"enforced":true`. kubernetes/README.md ("Access control") has
    the command.
 2. Set `mcp.image` to 1.11.0 or later. `helm upgrade --reuse-values` keeps the old default,
-   `autoptic/mcp:1.10.0`. Add `--set mcp.image=autoptic/mcp:1.11.0`, or use
+   `autoptic/mcp:1.10.0`. Add `--set mcp.image=autoptic/mcp:1.12.0`, or use
    `--reset-then-reuse-values`. The chart stops with an error when `mcp.image` is older than 1.11.0.
 3. Run `helm upgrade`. The chart removes the Secret `autoptic-mcp-secrets`, and the `MCP_SERVER_ID`
    and `MCP_SERVER_TOKEN` variables.

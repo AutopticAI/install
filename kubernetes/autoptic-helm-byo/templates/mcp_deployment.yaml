@@ -7,7 +7,7 @@
 {{- $major := atoi (index $v 0) }}
 {{- $minor := atoi (regexFind "^[0-9]+" (index $v 1)) }}
 {{- if or (lt $major 1) (and (eq $major 1) (lt $minor 11)) }}
-{{- fail (printf "mcp.image %s is older than 1.11.0. This chart gives mcp no MCP_SERVER_TOKEN, so an older mcp does not start. Set mcp.image to autoptic/mcp:1.11.0 or later. With helm upgrade --reuse-values, add --set mcp.image=autoptic/mcp:1.11.0." .Values.mcp.image) }}
+{{- fail (printf "mcp.image %s is older than 1.11.0. This chart gives mcp no MCP_SERVER_TOKEN, so an older mcp does not start. Set mcp.image to autoptic/mcp:1.11.0 or later. With helm upgrade --reuse-values, add --set mcp.image=autoptic/mcp:1.12.0." .Values.mcp.image) }}
 {{- end }}
 {{- end }}
 apiVersion: apps/v1

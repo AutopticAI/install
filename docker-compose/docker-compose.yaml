@@ -214,7 +214,7 @@ services:
   mcp:
     # 1.11.0 or later. The MCP server has no secret. Each MCP client sends its own named API token
     # as Bearer. The MCP server refuses each tool call when AUTH_ENFORCE or AUTH_PERMISSIONS is off.
-    image: autoptic/mcp:${AUTOPTIC_MCP_TAG:-1.11.0}
+    image: autoptic/mcp:${AUTOPTIC_MCP_TAG:-1.12.0}
     restart: unless-stopped
     ports:
       - "127.0.0.1:7000:7000"

@@ -148,7 +148,7 @@ copilot svc init --name server  --svc-type "Backend Service"          --image <Y
 copilot svc init --name ui      --svc-type "Load Balanced Web Service" --image <YOUR_ORG>/ui:latest      --port 8080
 copilot svc init --name metrics --svc-type "Backend Service"          --image <YOUR_ORG>/metrics:latest --port 6334
 copilot svc init --name vectors --svc-type "Backend Service"          --image <YOUR_ORG>/vectors:latest --port 8000
-copilot svc init --name mcp     --svc-type "Load Balanced Web Service" --image <YOUR_ORG>/mcp:1.11.0     --port 7000
+copilot svc init --name mcp     --svc-type "Load Balanced Web Service" --image <YOUR_ORG>/mcp:1.12.0     --port 7000
 ```
 
 > **`--port` is required on every service, including `Backend Service` ones with no ALB.**

@@ -11,7 +11,7 @@ server_image  = "autoptic/server:latest"
 ui_image      = "autoptic/ui:latest"
 metrics_image = "autoptic/metrics:latest"
 vectors_image = "autoptic/vectors:latest"
-mcp_image     = "autoptic/mcp:1.11.0" # use 1.11.0 or later
+mcp_image     = "autoptic/mcp:1.12.0" # use 1.11.0 or later
 
 # server_health_path defaults to "health". Override it only if your images use a different path.
 # server_health_path = "health"

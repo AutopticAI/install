@@ -49,7 +49,7 @@ Each image tag comes from `.env`. The default is `latest`. To pin a release, set
 |---|---|
 | `AUTOPTIC_SERVER_TAG` | `server`, `scheduler` and `rbac_mint`. One tag, so the three always run the same version. |
 | `AUTOPTIC_UI_TAG` | `ui` |
-| `AUTOPTIC_MCP_TAG` | `mcp`. The default is `1.11.0`. Use `1.11.0` or later, with `server` 1.216.0 or later. |
+| `AUTOPTIC_MCP_TAG` | `mcp`. The default is `1.12.0`, the mcp of rel-2.6.0. Use `1.11.0` or later, with `server` 1.216.0 or later. |
 | `AUTOPTIC_METRICS_TAG` | `metrics` |
 | `AUTOPTIC_VECTORS_TAG` | `vectors` |
 

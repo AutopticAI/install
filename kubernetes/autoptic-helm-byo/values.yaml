@@ -144,7 +144,7 @@ mcp:
   enabled: true
   # 1.11.0 or later. The MCP server has no secret. Each MCP client sends its own named token.
   # MCP refuses each tool call while api.auth.enforce or api.auth.permissions is off.
-  image: autoptic/mcp:1.11.0
+  image: autoptic/mcp:1.12.0
   imagePullPolicy: Always
   replicas: 1
 

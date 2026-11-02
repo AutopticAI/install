@@ -70,7 +70,7 @@ variable "vectors_image" {
 variable "mcp_image" {
   description = "Docker image for the mcp service. Use 1.11.0 or later, with server 1.216.0 or later."
   type        = string
-  default     = "autoptic/mcp:1.11.0"
+  default     = "autoptic/mcp:1.12.0"
 
   # mcp before 1.11.0 needs MCP_SERVER_TOKEN, which this template no longer gives. A tag without a
   # version number (latest, rel-*) or a digest passes, because its version is not known here.
