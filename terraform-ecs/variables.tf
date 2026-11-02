@@ -71,6 +71,13 @@ variable "mcp_image" {
   description = "Docker image for the mcp service. Use 1.11.0 or later, with server 1.216.0 or later."
   type        = string
   default     = "autoptic/mcp:1.11.0"
+
+  # mcp before 1.11.0 needs MCP_SERVER_TOKEN, which this template no longer gives. A tag without a
+  # version number (latest, rel-*) or a digest passes, because its version is not known here.
+  validation {
+    condition     = try(tonumber(regex(":([0-9]+)\\.([0-9]+)[^:/]*$", var.mcp_image)[0]) * 1000 + tonumber(regex(":([0-9]+)\\.([0-9]+)[^:/]*$", var.mcp_image)[1]) >= 1011, true)
+    error_message = "mcp_image is older than 1.11.0. This template gives mcp no MCP_SERVER_TOKEN, so an older mcp does not start. Use autoptic/mcp:1.11.0 or later."
+  }
 }
 
 # --- Sizing (Fargate cpu/memory units) ---

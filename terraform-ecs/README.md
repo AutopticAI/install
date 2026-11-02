@@ -164,29 +164,46 @@ secret of its own. Each MCP client sends two headers to `terraform output mcp_ur
 
 The docs page "Connect to Autoptic MCP and API" gives users the steps.
 
-`mcp` refuses each tool call while `auth_enforce` or `auth_permissions` is off. Before a client
-connects, make sure that the API enforces access control:
+`mcp` refuses each tool call while `auth_enforce` or `auth_permissions` is `false`. Then
+`terraform plan` shows a warning from the check `mcp_needs_access_control`.
+
+If both are `true`, make sure that the API enforces access control before a client connects:
 
 ```bash
 curl -s "$(terraform output -raw api_url)story/ep/default/auth/whoami" -H "x-api-token: <named token>"
 ```
 
-The answer must contain `"enforced":true`.
+The answer must contain `"enforced":true`. While `auth_enforce` is `false`, `api_url` is null,
+because the API has no public route.
 
 ### Upgrade from mcp 1.10
 
 mcp 1.11.0 removes the MCP keys. Clients that still send `X-MCP-Token` keep working, because mcp
 1.11.0 ignores this header.
 
-1. Run the `whoami` check above. If the answer has `"enforced":false`, do "Upgrading an existing
-   install" first.
-2. If `terraform.tfvars` sets `mcp_image` to a version before 1.11.0, set it to 1.11.0 or later.
-3. Remove `mcp_server_id` and `mcp_server_token` from `terraform.tfvars`.
-4. Run `terraform apply`. It removes the Secrets Manager secret `<app>-<env>-mcp-server-token`, and
+1. If `auth_enforce` or `auth_permissions` is `false` in `terraform.tfvars`, turn both on first.
+   Read the CAUTION in "Upgrading an existing install" before you do this.
+2. Run the `whoami` check above. The answer must contain `"enforced":true`.
+3. If `terraform.tfvars` sets `mcp_image` to a version before 1.11.0, set it to 1.11.0 or later.
+   The validation of `mcp_image` refuses an older version.
+4. Remove `mcp_server_id` and `mcp_server_token` from `terraform.tfvars`.
+5. Run `terraform apply`. It removes the Secrets Manager secret `<app>-<env>-mcp-server-token`, and
    it deploys `server` and `mcp` again.
-5. Remove the `X-MCP-Token` header from the MCP clients. You can do this at any time.
-6. When no MCP 1.10 server uses this API, erase two keys from the `default` secret dict. The keys
+6. Remove the `X-MCP-Token` header from the MCP clients. You can do this at any time.
+7. When no MCP 1.10 server uses this API, erase two keys from the `default` secret dict. The keys
    are `mcp.autoptic.server` and `mcp.autoptic.service.<mcp_server_id>` (web app: Utils, Secrets).
+
+**Rollback to the 1.10 template.** AWS keeps the removed secret for a 30-day recovery window. In
+this window, the 1.10 template cannot create a secret with the same name. Restore the secret, then
+import it into the 1.10 template:
+
+```bash
+aws secretsmanager restore-secret --secret-id <app>-<env>-mcp-server-token
+terraform import aws_secretsmanager_secret.mcp_token <secret ARN>
+```
+
+Set `mcp_server_token` in `terraform.tfvars` to the value of the restored secret. Then the key
+`mcp.autoptic.service.<mcp_server_id>` stays valid.
 
 ### Trusted proxies
 
