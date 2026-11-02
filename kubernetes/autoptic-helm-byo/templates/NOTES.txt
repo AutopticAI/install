@@ -64,10 +64,14 @@ Useful commands:
 
 Access control: api.auth.enforce={{ .Values.api.auth.enforce }}, api.auth.permissions={{ .Values.api.auth.permissions }}.
 {{- if or (and .Release.IsInstall .Values.rbac.mintOnInstall) (and .Release.IsUpgrade .Values.rbac.mintOnUpgrade) }}
-The setup-rbac hook minted the tokens. Get the role.admin token through bootstrap, and add the
-MCP keys for mcp 1.10. kubernetes/README.md ("Access control") in the install repo has both steps.
+The setup-rbac hook minted the tokens. Get the role.admin token through bootstrap.
+kubernetes/README.md ("Access control") in the install repo has the steps.
 {{- else if .Release.IsInstall }}
 rbac.mintOnInstall is false. Mint the tokens before anyone can use the API.
+{{- end }}
+{{- if and .Values.mcp.enabled (or (ne (toString .Values.api.auth.enforce) "true") (ne (toString .Values.api.auth.permissions) "true")) }}
+
+MCP is off: it refuses each tool call while api.auth.enforce or api.auth.permissions is off.
 {{- end }}
 
 For more information, visit the chart documentation.

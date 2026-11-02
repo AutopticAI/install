@@ -21,8 +21,8 @@ module "ecs" {
   #   points in their `volume` blocks, but never the mount targets themselves. Without this,
   #   ECS can schedule a task before the NFS mount target in that task's AZ is available, and
   #   the task fails with "Failed to resolve fs-....efs...amazonaws.com".
-  # - aws_secretsmanager_secret_version.{mcp_token,ui_webui_secret_key}: task_exec_secret_arns
-  #   below reference the *secret* resource's ARN, which exists before the *version* resource
+  # - aws_secretsmanager_secret_version.ui_webui_secret_key: ui's task_exec_secret_arns below
+  #   references the *secret* resource's ARN, which exists before the *version* resource
   #   populates an actual value. A secret with zero versions has nothing for GetSecretValue to
   #   return.
   #
@@ -37,7 +37,6 @@ module "ecs" {
     aws_lb_listener.internal_server_http,
     aws_lb_listener.internal_vectors_http,
     aws_efs_mount_target.this,
-    aws_secretsmanager_secret_version.mcp_token,
     aws_secretsmanager_secret_version.ui_webui_secret_key,
   ]
 
@@ -68,9 +67,6 @@ module "ecs" {
       # Deploy after metrics, and again when metrics can have new endpoints. See module "metrics".
       force_new_deployment = true
       triggers             = local.metrics_triggers
-
-      # rbac_mint reads MCP_SERVER_TOKEN from Secrets Manager, so the execution role needs this.
-      task_exec_secret_arns = [aws_secretsmanager_secret.mcp_token.arn]
 
       # server is behind two ALBs: the internal-server ALB (ui and mcp), and the public ALB
       # (/autoptic-api/, only with auth_enforce on). A target group belongs to one ALB only.
@@ -155,19 +151,11 @@ module "ecs" {
         # runs with enforce on and no tokens. It mints the role and machine tokens. It never
         # replaces a value that exists, so a task restart is safe. It logs the ids only, not the
         # values. Get role.admin through bootstrap (README.md, "Access control").
-        # MCP_SERVER_ID and MCP_SERVER_TOKEN are for a planned setup --rbac step that registers
-        # mcp.autoptic.service.<mcp_server_id>. Released servers ignore both.
         rbac_mint = {
           image                  = var.server_image
           essential              = false
           readonlyRootFilesystem = false
           command                = ["setup", "--rbac", "/mnt/shared/config.json"]
-          environment = [
-            { name = "MCP_SERVER_ID", value = var.mcp_server_id },
-          ]
-          secrets = [
-            { name = "MCP_SERVER_TOKEN", valueFrom = aws_secretsmanager_secret.mcp_token.arn },
-          ]
           # server and scheduler wait for this container. See startTimeout on setup_run.
           startTimeout = 120
           mountPoints = [{
@@ -303,7 +291,10 @@ module "ecs" {
       # One task only. The web app keeps its data on EFS (uidata), and a second task shares it.
       enable_autoscaling = false
 
-      # See the comment on mcp's task_exec_secret_arns below -- same reasoning applies here.
+      # ECS reads the `secrets` block below with the execution role, not the task role. The
+      # execution role acts before the task starts. task_exec_secret_arns gives the execution role
+      # secretsmanager:GetSecretValue on these ARNs only. A statement in tasks_iam_role_statements
+      # gives it to the wrong role, and each task then stops at start with AccessDeniedException.
       task_exec_secret_arns = [aws_secretsmanager_secret.ui_webui_secret_key.arn]
 
       load_balancer = {
@@ -478,13 +469,6 @@ module "ecs" {
       security_group_ids = [module.sg_tasks.id]
       assign_public_ip   = false
 
-      # ECS resolves the `secrets` block below using the EXECUTION role, not the task role --
-      # the execution role acts before the task role is ever assumed. task_exec_secret_arns is
-      # the module's built-in mechanism for this (it grants secretsmanager:GetSecretValue on
-      # exactly these ARNs); a statement under tasks_iam_role_statements would grant the wrong
-      # role and every task would fail with AccessDeniedException at startup.
-      task_exec_secret_arns = [aws_secretsmanager_secret.mcp_token.arn]
-
       # MCP clients reach mcp through /mcp on the public ALB. mcp has no internal ALB.
       load_balancer = {
         mcp = {
@@ -504,11 +488,9 @@ module "ecs" {
             { name = "SERVER_PORT", value = "7000" },
             { name = "AUTOPTIC_API_BASE_URL", value = "http://${aws_lb.internal_server.dns_name}:9999/" },
             { name = "MCP_ADMIN_TOOLS_ENABLED", value = tostring(var.mcp_admin_tools_enabled) },
-            { name = "MCP_SERVER_ID", value = var.mcp_server_id },
           ]
-          secrets = [
-            { name = "MCP_SERVER_TOKEN", valueFrom = aws_secretsmanager_secret.mcp_token.arn },
-          ]
+          # 1.11.0 or later. mcp has no secret. Each MCP client sends its own named token. mcp
+          # refuses each tool call while auth_enforce or auth_permissions is off.
           # No container-level healthCheck here -- aws_lb_target_group.mcp_public (alb.tf) already
           # runs an HTTP health check against /health on this same port.
         }

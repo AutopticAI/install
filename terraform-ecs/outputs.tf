@@ -42,10 +42,6 @@ output "efs_file_system_id" {
   value = aws_efs_file_system.this.id
 }
 
-output "mcp_secret_arn" {
-  value = aws_secretsmanager_secret.mcp_token.arn
-}
-
 output "ecs_events_log_group_name" {
   description = "Log group holding ECS deployment, service action, and task state change events. Query it with the Logs Insights recipes in ECS-DEPLOYMENT-LOGGING.md."
   value       = module.ecs_event_logging.log_group_name

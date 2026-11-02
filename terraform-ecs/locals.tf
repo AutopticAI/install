@@ -24,3 +24,12 @@ locals {
   # answers callers that send no token, so it stays on the internal-server ALB only.
   public_api_enabled = var.auth_enforce
 }
+
+# mcp 1.11.0 and later refuse each tool call while the API does not enforce access control. A
+# failed check is a warning in plan and apply, not an error.
+check "mcp_needs_access_control" {
+  assert {
+    condition     = var.auth_enforce && var.auth_permissions
+    error_message = "MCP is off: mcp refuses each tool call while auth_enforce or auth_permissions is false."
+  }
+}

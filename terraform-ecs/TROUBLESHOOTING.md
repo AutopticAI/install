@@ -75,10 +75,10 @@ perpetual diff. Already fixed in `security_groups.tf`: every all-protocol egress
 `from_port = -1, to_port = -1` to match what AWS actually stores. If `terraform plan` ever
 reports the same unresolvable diff repeatedly for a security group rule, check this first.
 
-## `mcp` never starts: `secretsmanager:GetSecretValue` `AccessDeniedException`
+## `ui` never starts: `secretsmanager:GetSecretValue` `AccessDeniedException`
 
 ```
-AccessDeniedException: User: .../mcp-task-exec-... is not authorized to perform:
+AccessDeniedException: User: .../ui-task-exec-... is not authorized to perform:
 secretsmanager:GetSecretValue ... because no identity-based policy allows the action.
 ```
 
@@ -86,19 +86,35 @@ The permission was granted to the **task role** (`tasks_iam_role_statements`), b
 a container's `secrets` block using the **execution role** — which acts before the task role is
 ever assumed, to pull the container image and any registry/secret references. Any `secrets`
 block anywhere in this config needs its Secrets Manager ARN in `task_exec_secret_arns`, not
-`tasks_iam_role_statements`. Already fixed for both `mcp` and `ui`.
+`tasks_iam_role_statements`. Already fixed for `ui`.
 
-## `mcp` starts, then exits: `MCP_SERVER_ID is required`
+## Each MCP tool call returns `AUTH_FAILED`: "MCP is off"
 
 ```
-config error: MCP_SERVER_ID is required for streamable_http transport
+the Autoptic API does not enforce access control (auth.enforce and auth.permissions), so MCP is off: ask an admin
 ```
 
-Straightforward missing environment variable, not present in the Copilot ECS docs this design
-was ported from (`mcp` didn't exist there at all). Set it via `var.mcp_server_id`
-(`<MCP_SERVER_ID>`, a lowercase slug). The default secret dict then needs
-`mcp.autoptic.service.<MCP_SERVER_ID>` with the value of `mcp_server_token`. Released servers do
-not add it, see "Access control" in `README.md`.
+mcp 1.11.0 and later refuse each tool call when the API does not enforce access control. The API
+enforces it only when `auth_enforce` and `auth_permissions` are both `true`. `terraform plan` then
+shows a warning from the check `mcp_needs_access_control`.
+
+1. If the install ran with `auth_enforce = false`, read the CAUTION in `README.md` ("Upgrading an
+   existing install") first. Each API client needs a named token before enforce goes on.
+2. Set `auth_enforce = true` and `auth_permissions = true` in `terraform.tfvars`.
+3. Run `terraform apply`.
+4. Run the `whoami` check in `README.md` ("Named tokens and MCP"). The answer must contain
+   `"enforced":true`.
+
+## `mcp` starts, then exits: `MCP_SERVER_TOKEN is required`
+
+```
+config error: MCP_SERVER_TOKEN is required
+```
+
+The `mcp` image is a version before 1.11.0. This template does not give `mcp` the variables of the
+MCP key. Set `mcp_image` to 1.11.0 or later. The validation of `mcp_image` refuses a tag such as
+`1.10.0`. A tag without a version number, such as `latest` or `rel-2.5.5`, can still hold an old
+version.
 
 ## `ui` crashes on boot: `Required environment variable not found`
 

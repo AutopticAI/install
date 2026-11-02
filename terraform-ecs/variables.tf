@@ -68,9 +68,16 @@ variable "vectors_image" {
 }
 
 variable "mcp_image" {
-  description = "Docker image for the mcp service."
+  description = "Docker image for the mcp service. Use 1.11.0 or later, with server 1.216.0 or later."
   type        = string
-  default     = "autoptic/mcp:1.10.0"
+  default     = "autoptic/mcp:1.12.0"
+
+  # mcp before 1.11.0 needs MCP_SERVER_TOKEN, which this template no longer gives. A tag without a
+  # version number (latest, rel-*) or a digest passes, because its version is not known here.
+  validation {
+    condition     = try(tonumber(regex(":([0-9]+)\\.([0-9]+)[^:/]*$", var.mcp_image)[0]) * 1000 + tonumber(regex(":([0-9]+)\\.([0-9]+)[^:/]*$", var.mcp_image)[1]) >= 1011, true)
+    error_message = "mcp_image is older than 1.11.0. This template gives mcp no MCP_SERVER_TOKEN, so an older mcp does not start. Use autoptic/mcp:1.11.0 or later."
+  }
 }
 
 # --- Sizing (Fargate cpu/memory units) ---
@@ -139,19 +146,6 @@ variable "server_health_path" {
 variable "mcp_admin_tools_enabled" {
   type    = bool
   default = false
-}
-
-variable "mcp_server_id" {
-  description = "Required for the streamable_http transport. A lowercase slug. With mcp 1.10, the default secret dict needs mcp.autoptic.service.<mcp_server_id> with the value of mcp_server_token (README.md, \"Access control\")."
-  type        = string
-  default     = "local-demo"
-}
-
-variable "mcp_server_token" {
-  description = "mcp's own outbound service credential to the Autoptic API (x-api-token), NOT the X-MCP-Token clients send. Leave it empty to auto-generate one. Released servers do not register it: add it as mcp.autoptic.service.<mcp_server_id> in the default secret dict (README.md, \"Access control\"). Use mcp 1.10.0 or later."
-  type        = string
-  default     = ""
-  sensitive   = true
 }
 
 # --- S3 / config.json ---
