@@ -103,6 +103,9 @@ An upgrade is `docker compose pull`, `docker compose down`, then `docker compose
 downtime. A new install needs no rotation. An install that ran with enforce off must do these steps in
 order. Do each step only after the previous step works.
 
+CAUTION: If `.env` sets `AUTOPTIC_MCP_TAG` to a version before 1.11.0, remove it before the upgrade.
+This file gives `mcp` no `MCP_SERVER_TOKEN`, so an older `mcp` stops at start and restarts in a loop.
+
 CAUTION: Do step 1 before the first `docker compose up` with this version of the file. Otherwise the
 API enforces tokens at once, and REST clients without a named token stop working.
 
