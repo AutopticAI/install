@@ -38,23 +38,10 @@ spec:
         env:
         - name: SERVER_PORT
           value: {{ .Values.mcp.service.targetPort | quote }}
-        - name: MCP_SERVER_ID
-          value: {{ .Values.mcp.env.serverId | required "mcp.env.serverId is required when mcp.enabled=true" | quote }}
         - name: AUTOPTIC_API_BASE_URL
           value: {{ .Values.mcp.env.apiBaseUrl | quote }}
         - name: MCP_ADMIN_TOOLS_ENABLED
           value: {{ .Values.mcp.env.adminToolsEnabled | quote }}
-        - name: MCP_SERVER_TOKEN
-          valueFrom:
-            secretKeyRef:
-              name: {{ .Values.mcp.secretName }}
-              key: mcp-server-token
-        - name: AUTOPTIC_API_TOKEN
-          valueFrom:
-            secretKeyRef:
-              name: {{ .Values.mcp.secretName }}
-              key: autoptic-api-token
-              optional: true
         {{- with .Values.mcp.livenessProbe }}
         livenessProbe:
           {{- toYaml . | nindent 10 }}

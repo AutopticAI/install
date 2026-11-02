@@ -489,65 +489,59 @@ entries), `autoptic_search_brief_records`/`_get_brief_record` (find and read pas
 `autoptic_run_agent_skill` (execute a skill), and the persisted-config CRUD tools (`autoptic_config_list`/`_get`/
 `_delete`, `autoptic_agents_save`, `autoptic_env_save`, `autoptic_pql_save`, `autoptic_skills_save`).
 
-**How it's secured — two separate tokens, not one:**
+**How it is secured:** the MCP server has no secret of its own. Each MCP client sends two headers:
 
-1. `MCP_SERVER_TOKEN` (the `mcp-server-token` key in the Secret below). This is the mcp pod's
-   own credential to the Autoptic API — it identifies this MCP server instance, and the Autoptic
-   API checks it against a value stored under the key `mcp.autoptic.service.<serverId>` in
-   Autoptic's own secret store (`<serverId>` is `mcp.env.serverId` below). The pod refuses to
-   start without it set (`config error: MCP_SERVER_TOKEN is required for streamable_http transport`).
-2. The `X-MCP-Token` header value an actual MCP client sends (together with `Authorization: Bearer <named token>` and `X-MCP-Endpoint`; see the docs page "Connect to Autoptic MCP and API"). This is a completely different,
-   per-endpoint token, checked live by the Autoptic API against a value stored under the key
-   `mcp.autoptic.server` in Autoptic's own secret store. This chart never creates or holds this
-   value — create it directly in Autoptic (see your Autoptic API's secrets documentation), and
-   give it only to whoever is configuring an MCP client.
+- `Authorization: Bearer <named token>`: the named token of the person or the agent.
+- `X-MCP-Endpoint: <endpoint id>`: usually `default`.
 
-**Do not send `MCP_SERVER_TOKEN` as `X-MCP-Token`, and do not store the same value under both
-`mcp.autoptic.service.<serverId>` and `mcp.autoptic.server` in Autoptic's secret store.** They
-are different tokens for different purposes; that mistake is the most common cause of
-`X-MCP-Token` requests failing to authenticate even though the pod itself is running fine.
+For each tool call, the MCP server asks the API who owns the token (`GET /auth/whoami`). Then it
+calls the API with the same token. Through MCP, a token can do only what it can do through the API.
+The docs page "Connect to Autoptic MCP and API" gives users the steps.
 
-**Configuring `MCP_SERVER_TOKEN`:**
-
-```yaml
-mcp:
-  enabled: true
-  secrets:
-    mcpServerToken: "" # leave empty — this chart generates and keeps one automatically
-    autopticApiToken: "" # optional; only needed if the Autoptic API itself requires bearer auth
-```
-
-Leave `mcpServerToken` empty. This chart generates a random value on first install and reuses
-that same value on every later `helm upgrade`, so it never needs typing by hand and never
-rotates out from under an already-configured deployment. Set it explicitly only if you need this
-value to match something outside this chart's control.
-
-To read the generated value later, for example to set the matching
-`mcp.autoptic.service.<serverId>` entry in Autoptic's secret store:
-
-```bash
-kubectl get secret <mcp.secretName> -n autoptic-byo -o jsonpath='{.data.mcp-server-token}' | base64 -d
-```
-
-If `externalSecrets.enabled: true`, this chart does **not** create the `mcp-server-token`/`autoptic-api-token`
-Secret itself, and does not generate a value either — sync both keys into `mcp.secretName` (default
-`autoptic-mcp-secrets`) via your own `ExternalSecret`/`SecretStore`.
+The MCP server refuses each tool call with `AUTH_FAILED` ("MCP is off") while `api.auth.enforce` or
+`api.auth.permissions` is `"false"`. mcp 1.11.0 needs server 1.216.0 or later.
 
 **Connecting to it:**
 
-- **From within the cluster** (an agent's `where[]` MCP entry):
-  `http://mcp-service.autoptic-byo.svc.cluster.local:7000/mcp`, with
-  `headers: { "X-MCP-Token": "{{ secret 'mcp.autoptic.server' }}" }` in the environment config —
-  the per-endpoint token from point 2 above, created directly in Autoptic, never `MCP_SERVER_TOKEN`.
-- **From outside the cluster**: enable `mcp.gateway` (same Gateway API `HTTPRoute` pattern the `ui`/automated
-  chart uses, just under `mcp.` instead of `ui.`) and connect to `https://<your-mcp-hostname>/mcp` with the
-  same `X-MCP-Token` header, the same per-endpoint token.
-- **Health check**: `GET /health` on port 7000 is unauthenticated and used for the liveness/readiness probes.
+- **From within the cluster** (an agent's `where[]` MCP entry): give the agents their own named
+  token, and save it in the secrets of the endpoint. Then send it with `auth.type` `bearer`:
 
-**Running mcp locally instead (stdio transport)**, e.g. for a developer's own Claude Desktop/Code
-`mcpServers` config, talking to the deployed Autoptic API over the internet rather than to the in-cluster
-pod at all — no `X-MCP-Token`/Gateway involved, since `stdio` skips the HTTP auth gate entirely and instead
-requires `AUTOPTIC_API_TOKEN` directly:
+  ```json
+  {
+    "name": "autoptic",
+    "type": "mcp",
+    "vars": {
+      "transport": "streamable_http",
+      "url": "http://mcp-service.autoptic-byo.svc.cluster.local:7000/mcp",
+      "headers": { "X-MCP-Endpoint": "default" },
+      "auth": { "type": "bearer", "bearer_token": "{{ secret 'mcp_agent_token' }}" }
+    }
+  }
+  ```
+
+- **From outside the cluster** (an external MCP client): enable `mcp.gateway`. It uses the same
+  Gateway API `HTTPRoute` pattern as `ui.gateway`. Connect to `https://<your-mcp-hostname>/mcp` with
+  the two headers.
+- **Health check**: `GET /health` on port 7000 needs no token. The liveness and readiness probes use it.
+
+**Upgrade from mcp 1.10:**
+
+1. Make sure that `whoami` reports `"enforced":true`. kubernetes/README.md ("Access control") has
+   the command.
+2. If you set `mcp.image` yourself, set it to 1.11.0 or later. With this chart, an older `mcp`
+   image does not start, because it needs `MCP_SERVER_TOKEN`.
+3. Run `helm upgrade`. The chart removes the Secret `autoptic-mcp-secrets`, and the `MCP_SERVER_ID`
+   and `MCP_SERVER_TOKEN` variables.
+4. If `externalSecrets.enabled` is `true`, remove the `ExternalSecret` that you made for
+   `autoptic-mcp-secrets`. The chart does not read this Secret now.
+5. Remove `X-MCP-Token` from the client configs and from the agent `where[]` entries. mcp 1.11.0
+   ignores it, so you can do this at any time.
+6. When no MCP 1.10 server uses this API, erase two keys from the `default` secret dict. The keys
+   are `mcp.autoptic.server` and `mcp.autoptic.service.<serverId>`.
+
+**Run mcp locally instead (stdio transport):** a developer can run the MCP server on their own
+computer, for Claude Desktop or Claude Code. This process calls the deployed Autoptic API, not the
+pod. With stdio, the MCP server reads the named token from `AUTOPTIC_API_TOKEN`:
 
 ```json
 {
@@ -557,15 +551,15 @@ requires `AUTOPTIC_API_TOKEN` directly:
       "args": ["--transport", "stdio"],
       "env": {
         "AUTOPTIC_API_BASE_URL": "https://<your-api-hostname>/",
-        "AUTOPTIC_API_TOKEN": "<your-autoptic-api-token>"
+        "AUTOPTIC_API_TOKEN": "<named token>"
       }
     }
   }
 }
 ```
 
-Note: this assumes the Autoptic **API** itself (not mcp) already has its own external route configured
-separately (outside this chart) — point `AUTOPTIC_API_BASE_URL` at wherever that is.
+For this, the Autoptic API needs its own external route. This chart does not make it. Set
+`AUTOPTIC_API_BASE_URL` to the address of that route.
 
 ---
 

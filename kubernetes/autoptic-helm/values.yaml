@@ -142,23 +142,11 @@ scheduler:
 # ============================================
 mcp:
   enabled: true
-  image: autoptic/mcp:1.10.0
+  # 1.11.0 or later. The MCP server has no secret. Each MCP client sends its own named token.
+  # MCP refuses each tool call while api.auth.enforce or api.auth.permissions is off.
+  image: autoptic/mcp:1.11.0
   imagePullPolicy: Always
   replicas: 1
-  secretName: autoptic-mcp-secrets
-
-  # mcpServerToken (MCP_SERVER_TOKEN): the mcp pod's own credential to the Autoptic API.
-  # Leave empty and this chart generates one on first install, then keeps that same
-  # value on every later upgrade. Add this value as mcp.autoptic.service.<serverId> in the
-  # default secret dict (kubernetes/README.md, "Access control"). This is NOT the value an MCP client sends
-  # as X-MCP-Token — that is the endpoint MCP key (mcp.autoptic.server), which you also add.
-  # autopticApiToken is optional: an Autoptic API bearer token forwarded upstream per-request.
-  # Ignored (and this Secret is not created) when externalSecrets.enabled=true —
-  # sync the same two keys via your ExternalSecret in that case.
-  secrets:
-    mcpServerToken: ""
-    autopticApiToken: ""
-
 
   resources:
     requests:
@@ -171,8 +159,6 @@ mcp:
   env:
     apiBaseUrl: http://api-service.autoptic.svc.cluster.local:9999/
     adminToolsEnabled: "false"
-    # The key mcp.autoptic.service.<serverId> holds the mcp-server-token value (kubernetes/README.md).
-    serverId: "autoptic-mcp"
 
   service:
     name: mcp-service

@@ -301,20 +301,25 @@ curl -s -X POST http://127.0.0.1:19999/story/ep/default/auth/bootstrap/credentia
 
 The answer is `{"principal_id":"role.admin","token":"<token>"}`.
 
-**MCP keys for mcp 1.10**
+**Named tokens and MCP**
 
-Released servers do not register the MCP keys. Add both in the web app, under Utils, Secrets, in the
-`default` secret dict:
+Create a named token for each person in the web app: Tokens, New principal, Person. The MCP server
+has no secret of its own. Each MCP client sends the named token of its person.
 
-| Key | Value |
-|---|---|
-| `mcp.autoptic.service.<mcp.env.serverId>` | The `mcp-server-token` value of the Secret `mcp.secretName` (default `autoptic-mcp-secrets`) |
-| `mcp.autoptic.server` | A new random value, for example from `openssl rand -hex 32`. MCP clients send it as `X-MCP-Token`. |
+Before a client connects, make sure that the API enforces access control. Use the port-forward above:
+
+```bash
+curl -s http://127.0.0.1:19999/story/ep/default/auth/whoami -H "x-api-token: <named token>"
+```
+
+The answer must contain `"enforced":true`. With `"enforced":false`, MCP refuses each tool call with
+`AUTH_FAILED` ("MCP is off"). The chart README ("MCP Server") has the upgrade steps from mcp 1.10.
 
 `config.json` is a Secret (`<config.name>-json`), not a ConfigMap. Each person who can read it can fetch
 every role token. Limit who may read Secrets in the namespace.
 
-To opt out, set `api.auth.enforce` and `api.auth.permissions` to `"false"`.
+To opt out, set `api.auth.enforce` and `api.auth.permissions` to `"false"`. Then MCP refuses each tool
+call.
 
 An upgrade of a release that ran without access control stops with an error while `api.auth.enforce` is
 `"true"`. For that first upgrade, set `api.auth.enforce=false`, `api.auth.permissions=false` and
