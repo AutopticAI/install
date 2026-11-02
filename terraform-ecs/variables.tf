@@ -68,9 +68,9 @@ variable "vectors_image" {
 }
 
 variable "mcp_image" {
-  description = "Docker image for the mcp service."
+  description = "Docker image for the mcp service. Use 1.11.0 or later, with server 1.216.0 or later."
   type        = string
-  default     = "autoptic/mcp:1.10.0"
+  default     = "autoptic/mcp:1.11.0"
 }
 
 # --- Sizing (Fargate cpu/memory units) ---
@@ -139,19 +139,6 @@ variable "server_health_path" {
 variable "mcp_admin_tools_enabled" {
   type    = bool
   default = false
-}
-
-variable "mcp_server_id" {
-  description = "Required for the streamable_http transport. A lowercase slug. With mcp 1.10, the default secret dict needs mcp.autoptic.service.<mcp_server_id> with the value of mcp_server_token (README.md, \"Access control\")."
-  type        = string
-  default     = "local-demo"
-}
-
-variable "mcp_server_token" {
-  description = "mcp's own outbound service credential to the Autoptic API (x-api-token), NOT the X-MCP-Token clients send. Leave it empty to auto-generate one. Released servers do not register it: add it as mcp.autoptic.service.<mcp_server_id> in the default secret dict (README.md, \"Access control\"). Use mcp 1.10.0 or later."
-  type        = string
-  default     = ""
-  sensitive   = true
 }
 
 # --- S3 / config.json ---

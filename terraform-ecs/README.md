@@ -154,22 +154,39 @@ CAUTION: Keep each copy of `config.json` as safe as the `role.admin` token. Its 
 proof for bootstrap. Copies are in the deploy bucket (each version), on EFS, and on the computer
 that ran Terraform.
 
-### MCP keys for mcp 1.10
+### Named tokens and MCP
 
-Released servers do not register the MCP keys. Add both in the web app, under Utils, Secrets, in
-the `default` secret dict:
+Create a named token for each person in the web app: Tokens, New principal, Person. `mcp` has no
+secret of its own. Each MCP client sends two headers to `terraform output mcp_url`:
 
-| Key | Value |
-|---|---|
-| `mcp.autoptic.service.<mcp_server_id>` | The value of the Secrets Manager secret in `terraform output mcp_secret_arn` |
-| `mcp.autoptic.server` | A new random value, for example from `openssl rand -hex 32`. MCP clients send it as `X-MCP-Token`. |
+- `Authorization: Bearer <named token>`
+- `X-MCP-Endpoint: default`
 
-To read the first value, run this command:
+The docs page "Connect to Autoptic MCP and API" gives users the steps.
+
+`mcp` refuses each tool call while `auth_enforce` or `auth_permissions` is off. Before a client
+connects, make sure that the API enforces access control:
 
 ```bash
-aws secretsmanager get-secret-value --secret-id "$(terraform output -raw mcp_secret_arn)" \
-  --query SecretString --output text
+curl -s "$(terraform output -raw api_url)story/ep/default/auth/whoami" -H "x-api-token: <named token>"
 ```
+
+The answer must contain `"enforced":true`.
+
+### Upgrade from mcp 1.10
+
+mcp 1.11.0 removes the MCP keys. Clients that still send `X-MCP-Token` keep working, because mcp
+1.11.0 ignores this header.
+
+1. Run the `whoami` check above. If the answer has `"enforced":false`, do "Upgrading an existing
+   install" first.
+2. If `terraform.tfvars` sets `mcp_image` to a version before 1.11.0, set it to 1.11.0 or later.
+3. Remove `mcp_server_id` and `mcp_server_token` from `terraform.tfvars`.
+4. Run `terraform apply`. It removes the Secrets Manager secret `<app>-<env>-mcp-server-token`, and
+   it deploys `server` and `mcp` again.
+5. Remove the `X-MCP-Token` header from the MCP clients. You can do this at any time.
+6. When no MCP 1.10 server uses this API, erase two keys from the `default` secret dict. The keys
+   are `mcp.autoptic.server` and `mcp.autoptic.service.<mcp_server_id>` (web app: Utils, Secrets).
 
 ### Trusted proxies
 
