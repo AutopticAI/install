@@ -373,6 +373,69 @@ crash-looping tasks to clean up can legitimately take 5–15+ minutes.
 
 ---
 
+## Step 12a: Load sample content
+
+The `server` task does not load the sample content. Load it one time with `setup --load`, from
+AWS CloudShell. The command writes to DynamoDB directly, so it does not need the API. Docker
+Compose does the same in its Step 6, and the Helm chart does it in a hook.
+
+The sample content is:
+
+- The `default` environment and the scaffold of the `default` secret dict.
+- The sample PQL queries.
+- The example agent `cloud-services.aws` and the example tool `measure-cloud-usage.aws`.
+
+The CloudShell user needs `s3:GetObject` on `<DEPLOY_ARTIFACTS_BUCKET>`. It also needs DynamoDB
+read and write access on the tables `autoptic-*-<TENANT_SHORT_NAME>-*`.
+
+1. Make sure that the `server` deployment of Step 12 is complete. The `setup_run` container
+   creates the tables first.
+2. Open AWS CloudShell in the region of the environment. Use the default environment, not a VPC
+   environment.
+3. Get the image of the `server` service. It is `image.location` in
+   `copilot/server/manifest.yml`. Use this image in step 6, not `latest`.
+
+   CAUTION: Remove the copy of `config.json` at the end of this procedure. Its SHA-256 gives the
+   `role.admin` token through bootstrap.
+
+4. Copy `config.json` from the deploy bucket:
+
+   ```bash
+   aws s3 cp s3://<DEPLOY_ARTIFACTS_BUCKET>/config.json ~/config.json && chmod 600 ~/config.json
+   ```
+
+5. Export the CloudShell credentials as environment variables. A container cannot read the
+   CloudShell credential endpoint.
+
+   ```bash
+   eval "$(aws configure export-credentials --format env)"
+   ```
+
+6. Load the sample content:
+
+   ```bash
+   docker run --rm \
+     -v ~/config.json:/server/config.json:ro \
+     -e AWS_REGION -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_SESSION_TOKEN \
+     <server_image> setup --load /server/config.json
+   ```
+
+7. Make sure that the output contains `Pre-configured content loading completed`.
+8. Remove the copy of `config.json` and the image:
+
+   ```bash
+   rm ~/config.json && docker rmi <server_image>
+   ```
+
+`setup --load` creates items only. It skips an item that exists, so a second run is safe.
+
+CAUTION: Do not use `setup --load-force` on an install that is in use. It resets each secret in
+the `default` dict to the sample value. Only the RBAC tokens stay.
+
+If Docker Hub refuses the pull because of its rate limit, run `docker login`, then pull again.
+
+---
+
 ## Step 13 (optional): Custom domain + HTTPS
 
 See `DNS-TLS-SETUP.md` in this directory for the full walkthrough. Copilot's ALB only gets
