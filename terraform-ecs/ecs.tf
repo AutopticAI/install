@@ -224,7 +224,7 @@ module "ecs" {
       # setup_run container creates the DynamoDB tables and S3 snapshot bucket on first start.
       # The server names them autoptic-<table>-<instance id> and autoptic-snaps-<instance id>,
       # and the instance id starts with the tenant short name.
-      tasks_iam_role_statements = [
+      tasks_iam_role_statements = concat([
         {
           sid    = "SelfProvisionedDynamoDB"
           effect = "Allow"
@@ -275,7 +275,27 @@ module "ecs" {
             values   = [aws_efs_access_point.sharedfiles.arn]
           }]
         },
-      ]
+        ],
+        # Read-only access for the AWS sources ("use_iam": true), the same actions as the data-plane
+        # policy in the docs page "AWS". The ECS task role takes the place of the EC2 instance
+        # profile. Without these actions, an AWS source answers AccessDenied.
+        [for s in [
+          {
+            sid    = "AwsTelemetryRead"
+            effect = "Allow"
+            actions = [
+              "cloudwatch:GetMetricData",
+              "cloudwatch:ListMetrics",
+              "logs:DescribeLogGroups",
+              "logs:StartQuery",
+              "logs:GetQueryResults",
+              "cloudtrail:LookupEvents",
+              "ce:GetCostAndUsage",
+            ]
+            resources = ["*"]
+          },
+        ] : s if var.aws_telemetry_read]
+      )
     }
 
     ui = {

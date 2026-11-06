@@ -213,6 +213,30 @@ Server releases up to 1.217.4 do not read `AUTH_TRUSTED_PROXIES`. With such a re
 
 The docs page "Access control" has the steps for admins and for upgrades.
 
+## AWS data sources
+
+On ECS, the server task role takes the place of the EC2 instance profile. An AWS source with
+`"use_iam": true` uses this role. PQL runs inside the `server` task, so no other role needs access.
+
+`aws_telemetry_read` is `true` by default. Then the task role can read CloudWatch metrics and logs,
+CloudTrail, and Cost Explorer in this account. These are the actions of the data-plane policy in
+the docs page "AWS". Without them, an AWS source answers `AccessDenied`.
+
+```json
+{
+  "name": "aws_prod",
+  "type": "CloudWatch",
+  "vars": {
+    "AwsRegion": "<YOUR_AWS_REGION>",
+    "window": "300s",
+    "use_iam": true
+  }
+}
+```
+
+If no AWS source reads this account, set `aws_telemetry_read = false`. To read other accounts,
+use `role_arn` or org mode. The docs page "AWS" has the steps.
+
 ## Public routes
 
 The public ALB serves one host with the same paths as the Docker Compose nginx proxy:
