@@ -28,5 +28,9 @@ config_json_path             = "./config.json"
 # auth_observe     = false
 # ui_role_mapping  = ""  # for example "user=role.operator"
 
+# The server task role reads CloudWatch, CloudTrail and Cost Explorer for AWS sources with
+# "use_iam": true. Set false when no AWS source reads this account.
+# aws_telemetry_read = true
+
 # Idle timeout of the public and internal-server ALBs. Long agent runs and MCP streams need it.
 # alb_idle_timeout = 300

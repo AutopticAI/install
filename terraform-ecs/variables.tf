@@ -216,6 +216,14 @@ variable "ui_role_mapping" {
   default     = ""
 }
 
+# --- AWS data sources ---
+
+variable "aws_telemetry_read" {
+  description = "Give the server task role read access to CloudWatch metrics and logs, CloudTrail, and Cost Explorer in this account. AWS sources with \"use_iam\": true use this role. Set false when no AWS source reads this account."
+  type        = bool
+  default     = true
+}
+
 # --- Load balancers (alb.tf) ---
 
 variable "alb_idle_timeout" {
