@@ -111,6 +111,86 @@ restarts `server`, `scheduler` and `ui` with the new file. The same applies to l
 Run `terraform plan` immediately after — it should report **no changes**. If it doesn't, resolve
 that drift before moving on; see `TROUBLESHOOTING.md` for common causes.
 
+## Step 5: Load sample content
+
+The `server` task does not load the sample content. Load it one time with `setup --load`, from
+AWS CloudShell. The command writes to DynamoDB directly, so it does not need the API. Docker
+Compose does the same in its Step 6, and the Helm chart does it in a hook.
+
+The sample content is:
+
+- The `default` environment and the scaffold of the `default` secret dict.
+- The sample PQL queries.
+- The example agent `cloud-services.aws` and the example tool `measure-cloud-usage.aws`.
+
+Before you start, get these values on the computer that ran Terraform:
+
+```bash
+terraform output ecs_cluster_name
+terraform output deploy_artifacts_bucket_name
+```
+
+The CloudShell user needs `s3:GetObject` on the deploy bucket. It also needs DynamoDB read and
+write access on the tables `autoptic-*-<tenant_short_name>-*`.
+
+1. Make sure that the `server` rollout is `COMPLETED`. The `setup_run` container creates the
+   tables first.
+
+   ```bash
+   aws ecs describe-services --cluster <ecs_cluster_name> --services server \
+     --query 'services[0].deployments[0].rolloutState'
+   ```
+
+2. Open AWS CloudShell in the region of the install. Use the default environment, not a VPC
+   environment.
+3. Get the image of the `server` container. Use this image in step 6, not `latest`.
+
+   ```bash
+   TASK_DEF=$(aws ecs describe-services --cluster <ecs_cluster_name> --services server \
+     --query 'services[0].taskDefinition' --output text)
+   aws ecs describe-task-definition --task-definition "$TASK_DEF" \
+     --query "taskDefinition.containerDefinitions[?name=='server'].image" --output text
+   ```
+
+   CAUTION: Remove the copy of `config.json` at the end of this procedure. Its SHA-256 gives the
+   `role.admin` token through bootstrap.
+
+4. Copy `config.json` from the deploy bucket:
+
+   ```bash
+   aws s3 cp s3://<deploy_artifacts_bucket_name>/config.json ~/config.json && chmod 600 ~/config.json
+   ```
+
+5. Export the CloudShell credentials as environment variables. A container cannot read the
+   CloudShell credential endpoint.
+
+   ```bash
+   eval "$(aws configure export-credentials --format env)"
+   ```
+
+6. Load the sample content:
+
+   ```bash
+   docker run --rm \
+     -v ~/config.json:/server/config.json:ro \
+     -e AWS_REGION -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_SESSION_TOKEN \
+     <server_image> setup --load /server/config.json
+   ```
+
+7. Make sure that the output contains `Pre-configured content loading completed`.
+8. Remove the copy of `config.json` and the image:
+
+   ```bash
+   rm ~/config.json && docker rmi <server_image>
+   ```
+
+`setup --load` creates items only. It skips an item that exists, so a second run is safe.
+
+CAUTION: Do not use `setup --load-force` on an install that is in use. It resets each secret in
+the `default` dict to the sample value. Only the RBAC tokens stay.
+
+If Docker Hub refuses the pull because of its rate limit, run `docker login`, then pull again.
+
 ## Access control
 
 Access control is on by default. The `server` task runs two setup containers before `server` and
