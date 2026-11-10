@@ -237,3 +237,17 @@ variable "alb_idle_timeout" {
   type        = number
   default     = 300
 }
+
+# --- Bedrock Mantle access (bedrock.tf) ---
+
+variable "bedrock_enable" {
+  description = "Create an IAM user, a long-term Bedrock API key, and a Secrets Manager secret for Bedrock Mantle (GPT-6 Luna)."
+  type        = bool
+  default     = false
+}
+
+variable "bedrock_key_age_days" {
+  description = "Days until the Bedrock API key expires. Null uses the module default (90)."
+  type        = number
+  default     = null
+}
