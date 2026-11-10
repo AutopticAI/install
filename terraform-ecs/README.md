@@ -317,69 +317,57 @@ the docs page "AWS". Without them, an AWS source answers `AccessDenied`.
 If no AWS source reads this account, set `aws_telemetry_read = false`. To read other accounts,
 use `role_arn` or org mode. The docs page "AWS" has the steps.
 
-## Bedrock Mantle access (optional)
+## GPT-6 Luna on Amazon Bedrock (optional)
 
-This section gives Autoptic access to GPT-6 Luna on Amazon Bedrock, through the Bedrock Mantle
-endpoint. Bedrock Mantle needs a Bedrock API key as a Bearer token. The server cannot sign Mantle
-requests with the ECS task role. With `bedrock_enable = true`, `bedrock.tf` creates these items:
+This section gives Autoptic access to GPT-6 Luna on Amazon Bedrock Runtime. It uses the global
+cross-Region inference profile `global.openai.gpt-6-luna`. In `eu-west-1` (Ireland) and in the
+other EU Regions, this is the only profile for GPT-6 Luna. The Bedrock Mantle endpoint serves this
+model only in `us-east-1`, and no EU geographic profile exists.
 
-- An IAM user, `<app>-<env>-bedrock`. Its inline policy has the inference and Marketplace
-  statements of the AWS managed policy `AmazonBedrockMantleInferenceAccess`. It has no web
-  search, and it is limited to `us-east-1` and this account.
-- A long-term Bedrock API key for this user. The key expires after `bedrock_key_age_days`
-  (default 90).
-- A Secrets Manager secret, `<app>-<env>-bedrock-api-key`, that holds the key. The secret has no
-  recovery window, so you can turn `bedrock_enable` off and on again at once.
+With `bedrock_enable = true`, `ecs.tf` adds four `bedrock:InvokeModel` statements to the server
+task role. The task role signs each call. No API key, IAM user, or secret exists.
 
-No container reads this secret. You copy the key into Autoptic one time, after the apply.
+| Statement | Resource |
+|---|---|
+| `BedrockGlobalProfile` | The inference profile `global.openai.gpt-6-luna` in `aws_region` |
+| `BedrockGlobalModelInRegion` | The model `openai.gpt-6-luna` in `aws_region` |
+| `BedrockGlobalModelAnyRegion` | The model `openai.gpt-6-luna` with no Region. AWS sets `aws:RequestedRegion` to `unspecified` for it. |
+| `BedrockDefaultProject` | The default Bedrock project of the account in `aws_region` |
 
-1. Set `bedrock_enable = true` in `terraform.tfvars`. The endpoint is always `us-east-1`, because
-   Bedrock Mantle serves GPT-6 Luna only there.
-2. Run `terraform plan`, then `terraform apply`.
-3. Read the key from Secrets Manager:
+The model statements have the condition `bedrock:InferenceProfileArn`. Thus the role can use the
+model only through this profile.
 
-   ```bash
-   aws secretsmanager get-secret-value --region <aws_region> \
-     --secret-id "$(terraform output -raw bedrock_api_key_secret_arn)" \
-     --query SecretString --output text
+CAUTION: A global profile can process requests in any commercial AWS Region. Do not use it when
+your data must stay in the EU. Also, an SCP that blocks unused Regions refuses the calls, unless it
+allows `aws:RequestedRegion` = `unspecified`.
+
+1. Enable model access for GPT-6 Luna in the Bedrock console of `aws_region`.
+2. Set `bedrock_enable = true` in `terraform.tfvars`.
+3. Run `terraform plan`, then `terraform apply`. The plan changes the server task role only.
+4. In Autoptic, add a prompt profile with `type` `openai_bedrock`. Do not set `token`. Use the
+   outputs `bedrock_endpoint` and `bedrock_model_id` for `endpoint` and `model`:
+
+   ```json
+   {
+     "name": "default",
+     "type": "openai_bedrock",
+     "vars": {
+       "endpoint": "https://bedrock-runtime.eu-west-1.amazonaws.com/openai/v1",
+       "model": "global.openai.gpt-6-luna",
+       "max_tokens": 4096,
+       "context_window": 272000,
+       "reasoning_effort": "low"
+     }
+   }
    ```
 
-4. Do a test of the key against Bedrock Mantle:
+5. Save the environment. Then run one agent and ask a question in Investigations.
 
-   ```bash
-   curl -s https://bedrock-mantle.us-east-1.api.aws/openai/v1/chat/completions \
-     -H "Authorization: Bearer <key>" -H "Content-Type: application/json" \
-     -d '{"model":"openai.gpt-6-luna","messages":[{"role":"user","content":"ping"}]}'
-   ```
+The server signs with the default credential chain, which resolves to the task role on ECS. The
+Region in the endpoint must match `aws_region`.
 
-5. Make sure that the response contains a `choices` list. The first call also subscribes the
-   account to the model in AWS Marketplace.
-6. In Autoptic, add the key to the secrets dictionary of the environment as `bedrock.token`.
-7. Add the GPT-6 Luna prompt profile. The values for `endpoint` and `model` are in the outputs
-   `bedrock_endpoint` and `bedrock_model_id`. The server docs, LLM Providers, have the profile.
-
-CAUTION: Keep access to the Terraform state bucket tight. The key value is in the state, and
-anyone who can read the state can call Bedrock on your account.
-
-CAUTION: A change of `bedrock_key_age_days` replaces the key. The old key stops at once, and
-Autoptic gets errors until you do steps 3 to 6 again.
-
-To replace the key before it expires (the output `bedrock_api_key_expiration` gives the date):
-
-1. Run this command:
-
-   ```bash
-   terraform apply -replace='module.bedrock_access[0].aws_iam_service_specific_credential.this'
-   ```
-
-2. Do steps 3 to 6 again with the new key. The old key stops at once.
-
-Do not make more keys for this IAM user in the console or with the AWS CLI. Terraform does not
-know about them, so `terraform destroy` cannot remove the user. AWS also allows only two keys
-for each user.
-
-AWS recommends long-term keys only for exploration. The server cannot refresh short-term keys,
-so this module uses a long-term key with an expiry date.
+CAUTION: Do not set `bedrock_enable` on a stack that uses the earlier Bedrock Mantle module. That
+module is removed. The next apply erases its IAM user, its API key, and its secret.
 
 ## Public routes
 

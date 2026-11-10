@@ -294,7 +294,67 @@ module "ecs" {
             ]
             resources = ["*"]
           },
-        ] : s if var.aws_telemetry_read]
+        ] : s if var.aws_telemetry_read],
+        # GPT-6 Luna on bedrock-runtime, through the global cross-Region inference profile. The task
+        # role signs the calls, so no API key exists. The three InvokeModel resources and the
+        # project resource are those of the AWS docs, "Global cross-Region inference" and the model
+        # card of GPT-6 Luna. The global model ARN has no Region, and AWS sets aws:RequestedRegion
+        # to "unspecified" for it.
+        [for s in [
+          {
+            sid       = "BedrockGlobalProfile"
+            effect    = "Allow"
+            actions   = ["bedrock:InvokeModel"]
+            resources = ["arn:aws:bedrock:${var.aws_region}:${data.aws_caller_identity.current.account_id}:inference-profile/global.openai.gpt-6-luna"]
+            condition = [{
+              test     = "StringEquals"
+              variable = "aws:RequestedRegion"
+              values   = [var.aws_region]
+            }]
+          },
+          {
+            sid       = "BedrockGlobalModelInRegion"
+            effect    = "Allow"
+            actions   = ["bedrock:InvokeModel"]
+            resources = ["arn:aws:bedrock:${var.aws_region}::foundation-model/openai.gpt-6-luna"]
+            condition = [
+              {
+                test     = "StringEquals"
+                variable = "aws:RequestedRegion"
+                values   = [var.aws_region]
+              },
+              {
+                test     = "StringEquals"
+                variable = "bedrock:InferenceProfileArn"
+                values   = ["arn:aws:bedrock:${var.aws_region}:${data.aws_caller_identity.current.account_id}:inference-profile/global.openai.gpt-6-luna"]
+              },
+            ]
+          },
+          {
+            sid       = "BedrockGlobalModelAnyRegion"
+            effect    = "Allow"
+            actions   = ["bedrock:InvokeModel"]
+            resources = ["arn:aws:bedrock:::foundation-model/openai.gpt-6-luna"]
+            condition = [
+              {
+                test     = "StringEquals"
+                variable = "aws:RequestedRegion"
+                values   = ["unspecified"]
+              },
+              {
+                test     = "StringEquals"
+                variable = "bedrock:InferenceProfileArn"
+                values   = ["arn:aws:bedrock:${var.aws_region}:${data.aws_caller_identity.current.account_id}:inference-profile/global.openai.gpt-6-luna"]
+              },
+            ]
+          },
+          {
+            sid       = "BedrockDefaultProject"
+            effect    = "Allow"
+            actions   = ["bedrock:InvokeModel"]
+            resources = ["arn:aws:bedrock:${var.aws_region}:${data.aws_caller_identity.current.account_id}:project/default"]
+          },
+        ] : s if var.bedrock_enable]
       )
     }
 

@@ -35,7 +35,6 @@ config_json_path             = "./config.json"
 # Idle timeout of the public and internal-server ALBs. Long agent runs and MCP streams need it.
 # alb_idle_timeout = 300
 
-# Bedrock Mantle access for GPT-6 Luna. Creates an IAM user, a long-term Bedrock API key, and a
-# Secrets Manager secret. Copy the key into the Autoptic secret bedrock.token after the apply.
-# bedrock_enable       = false
-# bedrock_key_age_days = 90
+# GPT-6 Luna on Bedrock Runtime, through the global cross-Region inference profile. The server task
+# role signs the calls, so no API key exists. Requests can run in any commercial AWS Region.
+# bedrock_enable = false

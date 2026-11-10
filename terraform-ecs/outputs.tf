@@ -52,21 +52,11 @@ output "ecs_events_log_group_arn" {
 }
 
 output "bedrock_endpoint" {
-  description = "Bedrock Mantle base URL for the Autoptic prompt profile (vars.endpoint). Null when bedrock_enable is false."
-  value       = one(module.bedrock_access[*].endpoint)
+  description = "Bedrock Runtime base URL for the Autoptic prompt profile (vars.endpoint). Null when bedrock_enable is false."
+  value       = var.bedrock_enable ? "https://bedrock-runtime.${var.aws_region}.amazonaws.com/openai/v1" : null
 }
 
 output "bedrock_model_id" {
   description = "Model ID for the Autoptic prompt profile (vars.model). Null when bedrock_enable is false."
-  value       = one(module.bedrock_access[*].model_id)
-}
-
-output "bedrock_api_key_secret_arn" {
-  description = "Secrets Manager secret with the Bedrock API key. Copy its value into the Autoptic secret bedrock.token. Null when bedrock_enable is false."
-  value       = one(module.bedrock_access[*].api_key_secret_arn)
-}
-
-output "bedrock_api_key_expiration" {
-  description = "Expiry date of the Bedrock API key. Null when bedrock_enable is false."
-  value       = one(module.bedrock_access[*].api_key_expiration)
+  value       = var.bedrock_enable ? "global.openai.gpt-6-luna" : null
 }
